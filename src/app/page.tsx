@@ -18,10 +18,13 @@ export default function Home() {
     setSearched(false);
 
     try {
-      // 静的エクスポート対応: クライアントサイドで検索
-      await new Promise((resolve) => setTimeout(resolve, 600)); // 疑似遅延
-      const { searchProducts } = await import("@/lib/search");
-      const found = searchProducts(query);
+      const params = new URLSearchParams({ query: query.query, type: query.type });
+      const res = await fetch(`/api/search?${params}`);
+      if (!res.ok) {
+        const data = await res.json();
+        throw new Error(data.error || "検索に失敗しました");
+      }
+      const found = await res.json();
       setResults(found);
       setSearched(true);
     } catch (e) {
