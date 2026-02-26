@@ -2,6 +2,7 @@
 
 import { ProductResult, Mall, MALL_LABELS, MallPrice } from "@/lib/types";
 import { ExternalLink } from "lucide-react";
+import OverseasSearch from "./OverseasSearch";
 
 interface PriceTableProps {
   result: ProductResult;
@@ -225,6 +226,9 @@ export default function PriceTable({ result, thresholdPercent }: PriceTableProps
           </tbody>
         </table>
       </div>
+
+      {/* 海外EC検索 */}
+      <OverseasSearch result={result} />
     </div>
   );
 }
