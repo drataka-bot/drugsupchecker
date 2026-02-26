@@ -38,7 +38,7 @@ export default function Home() {
         <div className="max-w-4xl mx-auto px-4 py-4">
           <div className="flex items-center justify-between mb-3">
             <div>
-              <h1 className="text-xl font-bold text-gray-900">電脳せどりチェッカー</h1>
+              <h1 className="text-xl font-bold text-gray-900">価格チェッカー</h1>
               <p className="text-xs text-gray-500 mt-0.5">Amazon基準で各モールの価格を比較</p>
             </div>
             {/* ハイライト閾値設定 */}
