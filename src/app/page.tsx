@@ -34,6 +34,10 @@ export default function Home() {
   const [threshold, setThreshold] = useState(10);
   const [tab, setTab] = useState<"search" | "favorites">("search");
   const [favorites, setFavorites] = useState<ProductResult[]>([]);
+  const [searchMeta, setSearchMeta] = useState<{
+    rakuten: { total: number; shown: number };
+    yahoo: { total: number; shown: number };
+  } | null>(null);
 
   useEffect(() => {
     setFavorites(loadFavorites());
@@ -44,6 +48,7 @@ export default function Home() {
     setError(null);
     setSearched(false);
     setTab("search");
+    setSearchMeta(null);
 
     try {
       const params = new URLSearchParams({ query: query.query, type: query.type });
@@ -52,8 +57,9 @@ export default function Home() {
         const data = await res.json();
         throw new Error(data.error || "検索に失敗しました");
       }
-      const found = await res.json();
+      const { results: found, meta } = await res.json();
       setResults(found);
+      setSearchMeta(meta ?? null);
       setSearched(true);
     } catch (e) {
       setError(e instanceof Error ? e.message : "エラーが発生しました");
@@ -157,6 +163,20 @@ export default function Home() {
             <p className="text-4xl mb-4">❤</p>
             <p className="text-lg font-medium text-gray-500">お気に入りがありません</p>
             <p className="text-sm mt-2">商品カードのハートボタンで追加できます</p>
+          </div>
+        )}
+
+        {/* 検索件数バッジ */}
+        {tab === "search" && !isLoading && searched && searchMeta && (
+          <div className="flex flex-wrap gap-2 mb-3 text-xs">
+            <span className="bg-pink-50 border border-pink-200 text-pink-700 px-2.5 py-1 rounded-full">
+              楽天: {searchMeta.rakuten.shown}件表示 / 約{searchMeta.rakuten.total.toLocaleString()}件ヒット
+            </span>
+            {searchMeta.yahoo.total > 0 && (
+              <span className="bg-purple-50 border border-purple-200 text-purple-700 px-2.5 py-1 rounded-full">
+                Yahoo: {searchMeta.yahoo.shown}件表示 / 約{searchMeta.yahoo.total.toLocaleString()}件ヒット
+              </span>
+            )}
           </div>
         )}
 

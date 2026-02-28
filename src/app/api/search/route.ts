@@ -20,9 +20,15 @@ interface YahooHit {
   shipping?: { code?: number };
 }
 
-async function searchYahoo(query: string): Promise<ProductResult[]> {
+interface YahooResult {
+  items: ProductResult[];
+  total: number;
+  shown: number;
+}
+
+async function searchYahoo(query: string): Promise<YahooResult> {
   const appId = process.env.YAHOO_APP_ID;
-  if (!appId) return [];
+  if (!appId) return { items: [], total: 0, shown: 0 };
 
   try {
     const url = new URL("https://shopping.yahooapis.jp/ShoppingWebService/V3/itemSearch");
@@ -35,29 +41,33 @@ async function searchYahoo(query: string): Promise<ProductResult[]> {
     const res = await fetch(url.toString());
     if (!res.ok) {
       console.error("[Yahoo] error:", res.status, await res.text());
-      return [];
+      return { items: [], total: 0, shown: 0 };
     }
     const data = await res.json();
     const hits: YahooHit[] = data.hits || [];
 
-    return hits.map((h) => ({
-      name: h.name,
-      jan: h.janCode,
-      imageUrl: h.image?.medium || h.image?.small,
-      amazonPrice: null,
-      prices: [
-        {
-          mall: "yahoo" as const,
-          price: h.price,
-          url: h.url,
-          availability: h.inStock ? ("available" as const) : ("unavailable" as const),
-          shipping: h.shipping?.code === 0 ? 0 : undefined,
-        },
-      ],
-    }));
+    return {
+      items: hits.map((h) => ({
+        name: h.name,
+        jan: h.janCode,
+        imageUrl: h.image?.medium || h.image?.small,
+        amazonPrice: null,
+        prices: [
+          {
+            mall: "yahoo" as const,
+            price: h.price,
+            url: h.url,
+            availability: h.inStock ? ("available" as const) : ("unavailable" as const),
+            shipping: h.shipping?.code === 0 ? 0 : undefined,
+          },
+        ],
+      })),
+      total: data.totalResultsAvailable ?? hits.length,
+      shown: hits.length,
+    };
   } catch (e) {
     console.error("[Yahoo] fetch failed:", e);
-    return [];
+    return { items: [], total: 0, shown: 0 };
   }
 }
 
@@ -92,7 +102,7 @@ export async function GET(request: NextRequest) {
         headers: { Referer: siteUrl, Origin: siteUrl },
       }),
       searchYahoo(query),
-    ]);
+    ] as const);
 
     const rakutenData = await rakutenRes.json();
 
@@ -119,8 +129,14 @@ export async function GET(request: NextRequest) {
       ],
     }));
 
-    const results = [...rakutenResults, ...yahooResults];
-    return NextResponse.json(results);
+    const results = [...rakutenResults, ...yahooResults.items];
+    return NextResponse.json({
+      results,
+      meta: {
+        rakuten: { total: rakutenData.count ?? rakutenResults.length, shown: rakutenResults.length },
+        yahoo: { total: yahooResults.total, shown: yahooResults.shown },
+      },
+    });
   } catch {
     return NextResponse.json({ error: "Search failed" }, { status: 500 });
   }
