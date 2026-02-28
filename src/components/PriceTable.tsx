@@ -1,13 +1,45 @@
 "use client";
 
+import { useState } from "react";
 import { ProductResult, Mall, MALL_LABELS, MallPrice } from "@/lib/types";
-import { ExternalLink } from "lucide-react";
+import { ExternalLink, Heart, ChevronDown, ChevronUp } from "lucide-react";
 import OverseasSearch from "./OverseasSearch";
 
 interface PriceTableProps {
   result: ProductResult;
   thresholdPercent: number;
+  isFavorited?: boolean;
+  onToggleFavorite?: (result: ProductResult) => void;
 }
+
+const DOMESTIC_LINKS = [
+  {
+    name: "Amazon.co.jp",
+    color: "#FF9900",
+    buildUrl: ({ name, asin }: { name: string; asin?: string }) =>
+      asin
+        ? `https://www.amazon.co.jp/dp/${asin}`
+        : `https://www.amazon.co.jp/s?k=${encodeURIComponent(name)}`,
+  },
+  {
+    name: "ビックカメラ",
+    color: "#003399",
+    buildUrl: ({ name }: { name: string }) =>
+      `https://www.biccamera.com/bc/category/?q=${encodeURIComponent(name)}`,
+  },
+  {
+    name: "ヨドバシ",
+    color: "#FF6600",
+    buildUrl: ({ name }: { name: string }) =>
+      `https://www.yodobashi.com/?word=${encodeURIComponent(name)}`,
+  },
+  {
+    name: "au PAYマーケット",
+    color: "#EA0029",
+    buildUrl: ({ name }: { name: string }) =>
+      `https://paymarket.au.com/s?keyword=${encodeURIComponent(name)}`,
+  },
+];
 
 function calcDiff(amazonPrice: number | null, mallPrice: number | null): number | null {
   if (!amazonPrice || !mallPrice) return null;
@@ -137,7 +169,131 @@ function PriceRow({
   );
 }
 
-export default function PriceTable({ result, thresholdPercent }: PriceTableProps) {
+function ProfitCalculator({ lowestPrice }: { lowestPrice: number | null }) {
+  const [amazonSellPrice, setAmazonSellPrice] = useState("");
+  const [feeRate, setFeeRate] = useState(10);
+  const [fbaFee, setFbaFee] = useState(0);
+  const [open, setOpen] = useState(false);
+
+  const sellPrice = parseFloat(amazonSellPrice) || 0;
+  const profit = lowestPrice !== null && sellPrice > 0
+    ? Math.round(sellPrice * (1 - feeRate / 100)) - lowestPrice - fbaFee
+    : null;
+
+  const profitRate = profit !== null && sellPrice > 0
+    ? ((profit / sellPrice) * 100).toFixed(1)
+    : null;
+
+  return (
+    <div className="border-t border-gray-100">
+      <button
+        onClick={() => setOpen((v) => !v)}
+        className="w-full flex items-center justify-between px-4 py-2.5 text-sm text-gray-600 hover:bg-gray-50 transition-colors"
+      >
+        <span className="font-medium">💰 利益計算</span>
+        {open ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
+      </button>
+
+      {open && (
+        <div className="px-4 pb-4 bg-gray-50 space-y-3">
+          <div className="grid grid-cols-3 gap-2">
+            <div>
+              <label className="text-xs text-gray-500 block mb-1">Amazon販売価格</label>
+              <input
+                type="number"
+                value={amazonSellPrice}
+                onChange={(e) => setAmazonSellPrice(e.target.value)}
+                placeholder="¥ 入力"
+                className="w-full border border-gray-300 rounded px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400"
+              />
+            </div>
+            <div>
+              <label className="text-xs text-gray-500 block mb-1">Amazon手数料 (%)</label>
+              <input
+                type="number"
+                value={feeRate}
+                onChange={(e) => setFeeRate(Number(e.target.value))}
+                min={0}
+                max={50}
+                className="w-full border border-gray-300 rounded px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400"
+              />
+            </div>
+            <div>
+              <label className="text-xs text-gray-500 block mb-1">FBA料金 (¥)</label>
+              <input
+                type="number"
+                value={fbaFee}
+                onChange={(e) => setFbaFee(Number(e.target.value))}
+                min={0}
+                className="w-full border border-gray-300 rounded px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400"
+              />
+            </div>
+          </div>
+
+          {lowestPrice !== null && (
+            <div className="text-xs text-gray-500">
+              仕入価格(最安): <span className="font-semibold text-gray-700">¥{lowestPrice.toLocaleString()}</span>
+            </div>
+          )}
+
+          {profit !== null && (
+            <div className={`rounded-lg px-3 py-2 text-sm font-bold ${profit >= 0 ? "bg-green-100 text-green-800" : "bg-red-100 text-red-700"}`}>
+              推定利益: ¥{profit.toLocaleString()}
+              {profitRate && <span className="ml-2 font-normal text-xs">({profitRate}%)</span>}
+            </div>
+          )}
+
+          <p className="text-xs text-gray-400">
+            計算式: 販売価格 × (1 - 手数料%) - 仕入価格 - FBA料金
+          </p>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function DomesticLinks({ result }: { result: ProductResult }) {
+  const [open, setOpen] = useState(false);
+
+  return (
+    <div className="border-t border-gray-100">
+      <button
+        onClick={() => setOpen((v) => !v)}
+        className="w-full flex items-center justify-between px-4 py-2.5 text-sm text-gray-600 hover:bg-gray-50 transition-colors"
+      >
+        <span className="font-medium">🏪 他店舗で検索</span>
+        {open ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
+      </button>
+
+      {open && (
+        <div className="px-4 pb-4 bg-gray-50">
+          <div className="flex flex-wrap gap-2">
+            {DOMESTIC_LINKS.map((site) => (
+              <a
+                key={site.name}
+                href={site.buildUrl({ name: result.name, asin: result.asin })}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium text-white hover:opacity-80 transition-opacity"
+                style={{ backgroundColor: site.color }}
+              >
+                {site.name}
+                <ExternalLink size={10} />
+              </a>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+export default function PriceTable({
+  result,
+  thresholdPercent,
+  isFavorited = false,
+  onToggleFavorite,
+}: PriceTableProps) {
   const allPrices: MallPrice[] = result.prices;
   const sortedNonAmazon = allPrices
     .filter((p) => p.mall !== "amazon")
@@ -193,6 +349,21 @@ export default function PriceTable({ result, thresholdPercent }: PriceTableProps
             </p>
           )}
         </div>
+
+        {/* お気に入りボタン */}
+        {onToggleFavorite && (
+          <button
+            onClick={() => onToggleFavorite(result)}
+            className={`flex-shrink-0 p-2 rounded-full transition-colors ${
+              isFavorited
+                ? "text-red-500 bg-red-50 hover:bg-red-100"
+                : "text-gray-300 hover:text-red-400 hover:bg-red-50"
+            }`}
+            title={isFavorited ? "お気に入りから削除" : "お気に入りに追加"}
+          >
+            <Heart size={18} fill={isFavorited ? "currentColor" : "none"} />
+          </button>
+        )}
       </div>
 
       {/* 価格テーブル */}
@@ -226,6 +397,12 @@ export default function PriceTable({ result, thresholdPercent }: PriceTableProps
           </tbody>
         </table>
       </div>
+
+      {/* 利益計算 */}
+      <ProfitCalculator lowestPrice={lowestPrice?.price ?? null} />
+
+      {/* 他店舗で検索 */}
+      <DomesticLinks result={result} />
 
       {/* 海外EC検索 */}
       <OverseasSearch result={result} />

@@ -1,9 +1,30 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import SearchForm from "@/components/SearchForm";
 import PriceTable from "@/components/PriceTable";
 import { ProductResult, SearchQuery } from "@/lib/types";
+
+const FAVORITES_KEY = "drugsup_favorites";
+
+function loadFavorites(): ProductResult[] {
+  if (typeof window === "undefined") return [];
+  try {
+    return JSON.parse(localStorage.getItem(FAVORITES_KEY) || "[]");
+  } catch {
+    return [];
+  }
+}
+
+function saveFavorites(favs: ProductResult[]) {
+  localStorage.setItem(FAVORITES_KEY, JSON.stringify(favs));
+}
+
+function isSameProduct(a: ProductResult, b: ProductResult): boolean {
+  if (a.asin && b.asin) return a.asin === b.asin;
+  if (a.jan && b.jan) return a.jan === b.jan;
+  return a.name === b.name;
+}
 
 export default function Home() {
   const [results, setResults] = useState<ProductResult[]>([]);
@@ -11,11 +32,18 @@ export default function Home() {
   const [searched, setSearched] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [threshold, setThreshold] = useState(10);
+  const [tab, setTab] = useState<"search" | "favorites">("search");
+  const [favorites, setFavorites] = useState<ProductResult[]>([]);
+
+  useEffect(() => {
+    setFavorites(loadFavorites());
+  }, []);
 
   const handleSearch = async (query: SearchQuery) => {
     setIsLoading(true);
     setError(null);
     setSearched(false);
+    setTab("search");
 
     try {
       const params = new URLSearchParams({ query: query.query, type: query.type });
@@ -34,6 +62,19 @@ export default function Home() {
     }
   };
 
+  const handleToggleFavorite = (result: ProductResult) => {
+    setFavorites((prev) => {
+      const exists = prev.some((f) => isSameProduct(f, result));
+      const next = exists
+        ? prev.filter((f) => !isSameProduct(f, result))
+        : [...prev, result];
+      saveFavorites(next);
+      return next;
+    });
+  };
+
+  const displayResults = tab === "favorites" ? favorites : results;
+
   return (
     <div className="min-h-screen bg-gray-50">
       {/* ヘッダー */}
@@ -42,7 +83,7 @@ export default function Home() {
           <div className="flex items-center justify-between mb-3">
             <div>
               <h1 className="text-xl font-bold text-gray-900">価格チェッカー</h1>
-              <p className="text-xs text-gray-500 mt-0.5">Amazon基準で各モールの価格を比較</p>
+              <p className="text-xs text-gray-500 mt-0.5">複数モールの価格を比較・利益計算</p>
             </div>
             {/* ハイライト閾値設定 */}
             <div className="flex items-center gap-2 text-sm">
@@ -60,6 +101,36 @@ export default function Home() {
             </div>
           </div>
           <SearchForm onSearch={handleSearch} isLoading={isLoading} />
+
+          {/* タブ */}
+          <div className="flex gap-1 mt-3">
+            <button
+              onClick={() => setTab("search")}
+              className={`px-4 py-1.5 text-sm rounded-full transition-colors ${
+                tab === "search"
+                  ? "bg-blue-600 text-white"
+                  : "text-gray-500 hover:bg-gray-100"
+              }`}
+            >
+              検索結果
+              {searched && results.length > 0 && (
+                <span className="ml-1.5 text-xs opacity-75">({results.length})</span>
+              )}
+            </button>
+            <button
+              onClick={() => setTab("favorites")}
+              className={`px-4 py-1.5 text-sm rounded-full transition-colors ${
+                tab === "favorites"
+                  ? "bg-red-500 text-white"
+                  : "text-gray-500 hover:bg-gray-100"
+              }`}
+            >
+              ❤ お気に入り
+              {favorites.length > 0 && (
+                <span className="ml-1.5 text-xs opacity-75">({favorites.length})</span>
+              )}
+            </button>
+          </div>
         </div>
       </header>
 
@@ -80,8 +151,17 @@ export default function Home() {
           </div>
         )}
 
+        {/* お気に入りタブ: 空状態 */}
+        {tab === "favorites" && favorites.length === 0 && (
+          <div className="text-center py-16 text-gray-400">
+            <p className="text-4xl mb-4">❤</p>
+            <p className="text-lg font-medium text-gray-500">お気に入りがありません</p>
+            <p className="text-sm mt-2">商品カードのハートボタンで追加できます</p>
+          </div>
+        )}
+
         {/* 凡例 */}
-        {searched && !isLoading && results.length > 0 && (
+        {!isLoading && displayResults.length > 0 && (
           <div className="flex flex-wrap gap-3 mb-4 text-xs text-gray-600">
             <span className="flex items-center gap-1">
               <span className="inline-block w-3 h-3 rounded bg-green-100 border border-green-300" />
@@ -99,24 +179,32 @@ export default function Home() {
         )}
 
         {/* 結果 */}
-        {!isLoading && searched && (
-          results.length === 0 ? (
+        {!isLoading && (
+          displayResults.length === 0 && (tab === "search" && searched) ? (
             <div className="text-center py-16 text-gray-500">
               <p className="text-lg">商品が見つかりませんでした</p>
               <p className="text-sm mt-1">別のキーワードやJANコードで試してください</p>
             </div>
           ) : (
             <div className="flex flex-col gap-4">
-              <p className="text-sm text-gray-500">{results.length}件の商品が見つかりました</p>
-              {results.map((result, i) => (
-                <PriceTable key={i} result={result} thresholdPercent={threshold} />
+              {displayResults.length > 0 && (
+                <p className="text-sm text-gray-500">{displayResults.length}件</p>
+              )}
+              {displayResults.map((result, i) => (
+                <PriceTable
+                  key={i}
+                  result={result}
+                  thresholdPercent={threshold}
+                  isFavorited={favorites.some((f) => isSameProduct(f, result))}
+                  onToggleFavorite={handleToggleFavorite}
+                />
               ))}
             </div>
           )
         )}
 
         {/* 初期状態 */}
-        {!searched && !isLoading && (
+        {tab === "search" && !searched && !isLoading && (
           <div className="text-center py-16 text-gray-400">
             <p className="text-4xl mb-4">🔍</p>
             <p className="text-lg font-medium text-gray-500">商品を検索してください</p>
