@@ -36,7 +36,11 @@ export async function GET(request: NextRequest) {
     const data = await response.json();
 
     if (!response.ok) {
-      return NextResponse.json({ error: "Rakuten API error" }, { status: 500 });
+      console.error("Rakuten API error:", response.status, JSON.stringify(data));
+      return NextResponse.json(
+        { error: `Rakuten API error: ${response.status} - ${JSON.stringify(data)}` },
+        { status: 500 }
+      );
     }
 
     const results: ProductResult[] = (data.Items || []).map((item: RakutenItem) => ({
