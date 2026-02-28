@@ -10,72 +10,53 @@ interface RakutenItem {
   };
 }
 
-interface KeepaProduct {
-  asin: string;
-  title: string;
-  imagesCSV?: string;
-  stats?: {
-    current: number[];
-  };
+interface YahooHit {
+  name: string;
+  price: number;
+  url: string;
+  image?: { small?: string; medium?: string };
+  janCode?: string;
+  inStock?: boolean;
+  shipping?: { code?: number };
 }
 
-async function searchKeepa(query: string): Promise<ProductResult[]> {
-  const keepaKey = process.env.KEEPA_API_KEY;
-  if (!keepaKey) return [];
+async function searchYahoo(query: string): Promise<ProductResult[]> {
+  const appId = process.env.YAHOO_APP_ID;
+  if (!appId) return [];
 
   try {
-    const url = new URL("https://api.keepa.com/query");
-    url.searchParams.set("key", keepaKey);
-    url.searchParams.set("domain", "5"); // amazon.co.jp
-    url.searchParams.set("type", "search");
-    url.searchParams.set("term", query);
-    url.searchParams.set("stats", "1");
-    url.searchParams.set("history", "0");
+    const url = new URL("https://shopping.yahooapis.jp/ShoppingWebService/V3/itemSearch");
+    url.searchParams.set("appid", appId);
+    url.searchParams.set("query", query);
+    url.searchParams.set("hits", "30");
+    url.searchParams.set("sort", "+price");
+    url.searchParams.set("in_stock", "1");
 
-    console.log("[Keepa] key set:", !!keepaKey, "url:", url.toString().replace(keepaKey, "***"));
     const res = await fetch(url.toString());
-    const text = await res.text();
-    console.log("[Keepa] status:", res.status, "body:", text.slice(0, 500));
     if (!res.ok) {
-      console.error("[Keepa] error:", res.status);
+      console.error("[Yahoo] error:", res.status, await res.text());
       return [];
     }
-    const data = JSON.parse(text);
-    console.log("[Keepa] keys:", Object.keys(data), "products count:", data.products?.length);
-    const products: KeepaProduct[] = data.products || [];
+    const data = await res.json();
+    const hits: YahooHit[] = data.hits || [];
 
-    return products
-      .map((p) => {
-        // Keepa JPYは÷100不要（整数そのまま）
-        const rawPrice = p.stats?.current?.[0];
-        console.log("[Keepa] product:", p.asin, "rawPrice:", rawPrice);
-        const amazonPrice = rawPrice && rawPrice > 0 ? rawPrice : null;
-        const asin = p.asin;
-        const imageKey = p.imagesCSV?.split(",")?.[0];
-        const imageUrl = imageKey
-          ? `https://images-na.ssl-images-amazon.com/images/I/${imageKey}`
-          : undefined;
-
-        return {
-          name: p.title,
-          asin,
-          imageUrl,
-          amazonPrice,
-          prices: amazonPrice
-            ? [
-                {
-                  mall: "amazon" as const,
-                  price: amazonPrice,
-                  url: `https://www.amazon.co.jp/dp/${asin}`,
-                  availability: "available" as const,
-                },
-              ]
-            : [],
-        };
-      })
-      .filter((p) => p.amazonPrice !== null);
+    return hits.map((h) => ({
+      name: h.name,
+      jan: h.janCode,
+      imageUrl: h.image?.medium || h.image?.small,
+      amazonPrice: null,
+      prices: [
+        {
+          mall: "yahoo" as const,
+          price: h.price,
+          url: h.url,
+          availability: h.inStock ? ("available" as const) : ("unavailable" as const),
+          shipping: h.shipping?.code === 0 ? 0 : undefined,
+        },
+      ],
+    }));
   } catch (e) {
-    console.error("[Keepa] fetch failed:", e);
+    console.error("[Yahoo] fetch failed:", e);
     return [];
   }
 }
@@ -106,11 +87,11 @@ export async function GET(request: NextRequest) {
 
     const siteUrl = process.env.NEXT_PUBLIC_SITE_URL || "https://drugsupchecker.vercel.app";
 
-    const [rakutenRes, keepaResults] = await Promise.all([
+    const [rakutenRes, yahooResults] = await Promise.all([
       fetch(rakutenUrl.toString(), {
         headers: { Referer: siteUrl, Origin: siteUrl },
       }),
-      searchKeepa(query),
+      searchYahoo(query),
     ]);
 
     const rakutenData = await rakutenRes.json();
@@ -138,7 +119,7 @@ export async function GET(request: NextRequest) {
       ],
     }));
 
-    const results = [...keepaResults, ...rakutenResults];
+    const results = [...rakutenResults, ...yahooResults];
     return NextResponse.json(results);
   } catch {
     return NextResponse.json({ error: "Search failed" }, { status: 500 });
