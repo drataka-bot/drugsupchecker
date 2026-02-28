@@ -20,21 +20,19 @@ export async function GET(request: NextRequest) {
   }
 
   const appId = process.env.RAKUTEN_APP_ID;
-  if (!appId) {
+  const accessKey = process.env.RAKUTEN_ACCESS_KEY;
+  if (!appId || !accessKey) {
     return NextResponse.json({ error: "API key not configured" }, { status: 500 });
   }
 
   try {
-    const url = new URL("https://app.rakuten.co.jp/services/api/IchibaItem/Search/20220601");
+    const url = new URL("https://openapi.rakuten.co.jp/services/api/IchibaItem/Search/20220601");
     url.searchParams.set("applicationId", appId);
+    url.searchParams.set("accessKey", accessKey);
     url.searchParams.set("keyword", query);
     url.searchParams.set("hits", "30");
     url.searchParams.set("format", "json");
     url.searchParams.set("sort", "+itemPrice");
-
-    const debugUrl = url.toString().replace(appId, "***");
-    console.log("Rakuten request URL:", debugUrl);
-    console.log("keyword value:", query);
 
     const response = await fetch(url.toString());
     const data = await response.json();
