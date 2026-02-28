@@ -32,19 +32,24 @@ async function searchKeepa(query: string): Promise<ProductResult[]> {
     url.searchParams.set("stats", "1");
     url.searchParams.set("history", "0");
 
+    console.log("[Keepa] key set:", !!keepaKey, "url:", url.toString().replace(keepaKey, "***"));
     const res = await fetch(url.toString());
+    const text = await res.text();
+    console.log("[Keepa] status:", res.status, "body:", text.slice(0, 500));
     if (!res.ok) {
       console.error("[Keepa] error:", res.status);
       return [];
     }
-    const data = await res.json();
+    const data = JSON.parse(text);
+    console.log("[Keepa] keys:", Object.keys(data), "products count:", data.products?.length);
     const products: KeepaProduct[] = data.products || [];
 
     return products
       .map((p) => {
-        // stats.current[0] = Amazon price in cents (divide by 100 for JPY)
+        // Keepa JPYは÷100不要（整数そのまま）
         const rawPrice = p.stats?.current?.[0];
-        const amazonPrice = rawPrice && rawPrice > 0 ? rawPrice / 100 : null;
+        console.log("[Keepa] product:", p.asin, "rawPrice:", rawPrice);
+        const amazonPrice = rawPrice && rawPrice > 0 ? rawPrice : null;
         const asin = p.asin;
         const imageKey = p.imagesCSV?.split(",")?.[0];
         const imageUrl = imageKey
