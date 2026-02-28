@@ -32,6 +32,10 @@ export async function GET(request: NextRequest) {
     url.searchParams.set("format", "json");
     url.searchParams.set("sort", "+itemPrice");
 
+    const debugUrl = url.toString().replace(appId, "***");
+    console.log("Rakuten request URL:", debugUrl);
+    console.log("keyword value:", query);
+
     const response = await fetch(url.toString());
     const data = await response.json();
 
