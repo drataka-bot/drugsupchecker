@@ -34,7 +34,12 @@ export async function GET(request: NextRequest) {
     url.searchParams.set("format", "json");
     url.searchParams.set("sort", "+itemPrice");
 
-    const response = await fetch(url.toString());
+    const siteUrl = process.env.NEXT_PUBLIC_SITE_URL || "https://drugsupchecker.vercel.app";
+    const response = await fetch(url.toString(), {
+      headers: {
+        Referer: siteUrl,
+      },
+    });
     const data = await response.json();
 
     if (!response.ok) {
