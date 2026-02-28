@@ -26,7 +26,7 @@ export async function GET(request: NextRequest) {
   }
 
   try {
-    const url = new URL("https://openapi.rakuten.co.jp/services/api/IchibaItem/Search/20220601");
+    const url = new URL("https://openapi.rakuten.co.jp/ichibams/api/IchibaItem/Search/20220601");
     url.searchParams.set("applicationId", appId);
     url.searchParams.set("accessKey", accessKey);
     url.searchParams.set("keyword", query);
