@@ -35,9 +35,13 @@ export default function Home() {
   const [tab, setTab] = useState<"search" | "favorites">("search");
   const [favorites, setFavorites] = useState<ProductResult[]>([]);
   const [searchMeta, setSearchMeta] = useState<{
-    rakuten: { total: number; shown: number };
-    yahoo: { total: number; shown: number };
+    rakuten: { total: number; shown: number; hasMore: boolean };
+    yahoo: { total: number; shown: number; hasMore: boolean };
+    page: number;
+    hasMore: boolean;
   } | null>(null);
+  const [currentQuery, setCurrentQuery] = useState<SearchQuery | null>(null);
+  const [isLoadingMore, setIsLoadingMore] = useState(false);
 
   useEffect(() => {
     setFavorites(loadFavorites());
@@ -49,6 +53,7 @@ export default function Home() {
     setSearched(false);
     setTab("search");
     setSearchMeta(null);
+    setCurrentQuery(query);
 
     try {
       const params = new URLSearchParams({ query: query.query, type: query.type });
@@ -65,6 +70,27 @@ export default function Home() {
       setError(e instanceof Error ? e.message : "エラーが発生しました");
     } finally {
       setIsLoading(false);
+    }
+  };
+
+  const handleLoadMore = async () => {
+    if (!currentQuery || !searchMeta || isLoadingMore) return;
+    setIsLoadingMore(true);
+    try {
+      const nextPage = searchMeta.page + 1;
+      const params = new URLSearchParams({ query: currentQuery.query, type: currentQuery.type, page: String(nextPage) });
+      const res = await fetch(`/api/search?${params}`);
+      if (!res.ok) {
+        const data = await res.json();
+        throw new Error(data.error || "読み込みに失敗しました");
+      }
+      const { results: more, meta } = await res.json();
+      setResults((prev) => [...prev, ...more]);
+      setSearchMeta(meta ?? null);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "エラーが発生しました");
+    } finally {
+      setIsLoadingMore(false);
     }
   };
 
@@ -219,6 +245,15 @@ export default function Home() {
                   onToggleFavorite={handleToggleFavorite}
                 />
               ))}
+              {tab === "search" && searchMeta?.hasMore && (
+                <button
+                  onClick={handleLoadMore}
+                  disabled={isLoadingMore}
+                  className="w-full py-3 rounded-lg border border-gray-300 text-sm text-gray-600 hover:bg-gray-100 disabled:opacity-50 transition-colors"
+                >
+                  {isLoadingMore ? "読み込み中..." : "もっと見る"}
+                </button>
+              )}
             </div>
           )
         )}

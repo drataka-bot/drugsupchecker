@@ -26,15 +26,19 @@ interface YahooResult {
   shown: number;
 }
 
-async function searchYahoo(query: string): Promise<YahooResult> {
+async function searchYahoo(query: string, page: number): Promise<YahooResult> {
   const appId = process.env.YAHOO_APP_ID;
   if (!appId) return { items: [], total: 0, shown: 0 };
+
+  const hitsPerPage = 30;
+  const start = (page - 1) * hitsPerPage + 1;
 
   try {
     const url = new URL("https://shopping.yahooapis.jp/ShoppingWebService/V3/itemSearch");
     url.searchParams.set("appid", appId);
     url.searchParams.set("query", query);
-    url.searchParams.set("hits", "30");
+    url.searchParams.set("hits", String(hitsPerPage));
+    url.searchParams.set("start", String(start));
     url.searchParams.set("sort", "+price");
     url.searchParams.set("in_stock", "1");
 
@@ -75,6 +79,7 @@ export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url);
   const query = searchParams.get("query");
   const type = searchParams.get("type");
+  const page = Math.max(1, Number(searchParams.get("page") || "1"));
 
   if (!query) {
     return NextResponse.json({ error: "query is required" }, { status: 400 });
@@ -86,12 +91,15 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: "API key not configured" }, { status: 500 });
   }
 
+  const hitsPerPage = 30;
+
   try {
     const rakutenUrl = new URL("https://openapi.rakuten.co.jp/ichibams/api/IchibaItem/Search/20220601");
     rakutenUrl.searchParams.set("applicationId", appId);
     rakutenUrl.searchParams.set("accessKey", accessKey);
     rakutenUrl.searchParams.set("keyword", query);
-    rakutenUrl.searchParams.set("hits", "30");
+    rakutenUrl.searchParams.set("hits", String(hitsPerPage));
+    rakutenUrl.searchParams.set("page", String(page));
     rakutenUrl.searchParams.set("format", "json");
     rakutenUrl.searchParams.set("sort", "+itemPrice");
 
@@ -101,7 +109,7 @@ export async function GET(request: NextRequest) {
       fetch(rakutenUrl.toString(), {
         headers: { Referer: siteUrl, Origin: siteUrl },
       }),
-      searchYahoo(query),
+      searchYahoo(query, page),
     ] as const);
 
     const rakutenData = await rakutenRes.json();
@@ -129,12 +137,19 @@ export async function GET(request: NextRequest) {
       ],
     }));
 
+    const rakutenTotal: number = rakutenData.count ?? rakutenResults.length;
+    const rakutenPageCount: number = rakutenData.pageCount ?? Math.ceil(rakutenTotal / hitsPerPage);
+    const yahooTotal = yahooResults.total;
+    const yahooPageCount = Math.ceil(yahooTotal / hitsPerPage);
+
     const results = [...rakutenResults, ...yahooResults.items];
     return NextResponse.json({
       results,
       meta: {
-        rakuten: { total: rakutenData.count ?? rakutenResults.length, shown: rakutenResults.length },
-        yahoo: { total: yahooResults.total, shown: yahooResults.shown },
+        rakuten: { total: rakutenTotal, shown: rakutenResults.length, hasMore: page < rakutenPageCount },
+        yahoo: { total: yahooTotal, shown: yahooResults.shown, hasMore: page < yahooPageCount },
+        page,
+        hasMore: page < rakutenPageCount || page < yahooPageCount,
       },
     });
   } catch {
