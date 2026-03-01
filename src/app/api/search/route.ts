@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { ProductResult } from "@/lib/types";
+import { ProductResult, MallPrice } from "@/lib/types";
 
 interface RakutenItem {
   Item: {
@@ -75,6 +75,14 @@ async function searchYahoo(query: string, page: number): Promise<YahooResult> {
   }
 }
 
+/** ProductResult配列から最安値のものを返す */
+function cheapest(items: ProductResult[]): ProductResult | null {
+  if (items.length === 0) return null;
+  return items.reduce((a, b) =>
+    (a.prices[0]?.price ?? Infinity) <= (b.prices[0]?.price ?? Infinity) ? a : b
+  );
+}
+
 export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url);
   const query = searchParams.get("query");
@@ -142,6 +150,38 @@ export async function GET(request: NextRequest) {
     const yahooTotal = yahooResults.total;
     const yahooPageCount = Math.ceil(yahooTotal / hitsPerPage);
 
+    // JANコード検索: 同じ商品を両モールで最安値に絞り1枚のカードに統合
+    if (type === "jan") {
+      const bestRakuten = cheapest(rakutenResults);
+      const bestYahoo = cheapest(yahooResults.items);
+
+      const prices: MallPrice[] = [
+        ...(bestRakuten ? bestRakuten.prices : []),
+        ...(bestYahoo ? bestYahoo.prices : []),
+      ];
+
+      const merged: ProductResult | null = prices.length > 0
+        ? {
+            name: bestRakuten?.name ?? bestYahoo?.name ?? query,
+            jan: query,
+            imageUrl: bestRakuten?.imageUrl ?? bestYahoo?.imageUrl,
+            amazonPrice: null,
+            prices,
+          }
+        : null;
+
+      return NextResponse.json({
+        results: merged ? [merged] : [],
+        meta: {
+          rakuten: { total: rakutenTotal, shown: rakutenResults.length, hasMore: false },
+          yahoo: { total: yahooTotal, shown: yahooResults.shown, hasMore: false },
+          page: 1,
+          hasMore: false,
+        },
+      });
+    }
+
+    // 商品名・ASIN検索: 楽天・Yahoo結果をそのまま混合表示
     const results = [...rakutenResults, ...yahooResults.items];
     return NextResponse.json({
       results,

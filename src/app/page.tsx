@@ -198,9 +198,13 @@ export default function Home() {
             <span className="bg-pink-50 border border-pink-200 text-pink-700 px-2.5 py-1 rounded-full">
               楽天: {searchMeta.rakuten.shown}件表示 / 約{searchMeta.rakuten.total.toLocaleString()}件ヒット
             </span>
-            {searchMeta.yahoo.total > 0 && (
+            {searchMeta.yahoo.total > 0 ? (
               <span className="bg-purple-50 border border-purple-200 text-purple-700 px-2.5 py-1 rounded-full">
                 Yahoo: {searchMeta.yahoo.shown}件表示 / 約{searchMeta.yahoo.total.toLocaleString()}件ヒット
+              </span>
+            ) : (
+              <span className="bg-gray-50 border border-gray-200 text-gray-400 px-2.5 py-1 rounded-full">
+                Yahoo: 未設定（YAHOO_APP_IDを.env.localに設定してください）
               </span>
             )}
           </div>
