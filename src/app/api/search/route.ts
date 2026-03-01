@@ -28,28 +28,57 @@ interface YahooResult {
 
 interface KeepaResult {
   price: number | null;
+  availability: "available" | "unavailable" | "unknown";
   asin: string | null;
   url: string | null;
   name: string | null;
   imageUrl: string | null;
 }
 
-// Keepa CSVの最新価格を取得 (価格は JPY * 100 で格納されている)
-function latestKeepaPrice(csv: number[] | null | undefined): number | null {
-  if (!csv || csv.length < 2) return null;
-  // csv は [keepa_time, price, keepa_time, price, ...] の形式
-  const last = csv[csv.length - 1];
-  return last > 0 ? Math.round(last / 100) : null;
+const KEEPA_NULL = { price: null, availability: "unknown" as const, asin: null, url: null, name: null, imageUrl: null };
+
+/**
+ * Keepa価格パース (JPY は * 100 で格納: 198000 → ¥1,980)
+ * csv形式: [keepa_time, price, keepa_time, price, ...]
+ * stats.current形式: [price_type_0, price_type_1, ...]
+ */
+function parseKeepaPrice(v: number | null | undefined): number | null {
+  if (!v || v <= 0) return null;
+  return Math.round(v / 100);
+}
+
+function priceFromStats(current: number[] | null | undefined): number | null {
+  if (!current) return null;
+  // 0=Amazon直販, 1=新品最安, 7=FBA新品, 2=中古最安
+  for (const idx of [0, 1, 7, 2]) {
+    const p = parseKeepaPrice(current[idx]);
+    if (p !== null) return p;
+  }
+  return null;
+}
+
+function priceFromCsv(csv: (number[] | null)[] | null | undefined): number | null {
+  if (!csv) return null;
+  for (const idx of [0, 1, 7, 2]) {
+    const arr = csv[idx];
+    if (arr && arr.length >= 2) {
+      // 末尾要素が最新価格
+      const p = parseKeepaPrice(arr[arr.length - 1]);
+      if (p !== null) return p;
+    }
+  }
+  return null;
 }
 
 async function searchKeepa(identifier: string, type: "jan" | "asin"): Promise<KeepaResult> {
   const apiKey = process.env.KEEPA_API_KEY;
-  if (!apiKey) return { price: null, asin: null, url: null, name: null, imageUrl: null };
+  if (!apiKey) return KEEPA_NULL;
 
   try {
     const url = new URL("https://api.keepa.com/product");
     url.searchParams.set("key", apiKey);
     url.searchParams.set("domain", "5"); // Amazon Japan
+    url.searchParams.set("stats", "1");  // stats.current で現在価格を取得
 
     if (type === "asin") {
       url.searchParams.set("asin", identifier);
@@ -60,12 +89,12 @@ async function searchKeepa(identifier: string, type: "jan" | "asin"): Promise<Ke
     const res = await fetch(url.toString());
     if (!res.ok) {
       console.error("[Keepa] error:", res.status, await res.text());
-      return { price: null, asin: null, url: null, name: null, imageUrl: null };
+      return KEEPA_NULL;
     }
 
     const data = await res.json();
     const product = data.products?.[0];
-    if (!product) return { price: null, asin: null, url: null, name: null, imageUrl: null };
+    if (!product) return KEEPA_NULL;
 
     const asin = product.asin as string;
     const amazonUrl = `https://www.amazon.co.jp/dp/${asin}`;
@@ -74,17 +103,22 @@ async function searchKeepa(identifier: string, type: "jan" | "asin"): Promise<Ke
       ? `https://images-na.ssl-images-amazon.com/images/I/${product.imagesCSV.split(",")[0]}`
       : null;
 
-    // csv[0]=Amazon直販, csv[1]=マーケットプレイス新品, csv[7]=FBA新品 の順で最安値を取得
-    let currentPrice: number | null = null;
-    for (const idx of [0, 1, 7]) {
-      currentPrice = latestKeepaPrice(product.csv?.[idx]);
-      if (currentPrice !== null) break;
-    }
+    // stats.current を優先、なければ csv の末尾値にフォールバック
+    const currentPrice =
+      priceFromStats(product.stats?.current) ??
+      priceFromCsv(product.csv);
 
-    return { price: currentPrice, asin, url: amazonUrl, name, imageUrl };
+    return {
+      price: currentPrice,
+      availability: currentPrice !== null ? "available" : "unavailable",
+      asin,
+      url: amazonUrl,
+      name,
+      imageUrl,
+    };
   } catch (e) {
     console.error("[Keepa] fetch failed:", e);
-    return { price: null, asin: null, url: null, name: null, imageUrl: null };
+    return KEEPA_NULL;
   }
 }
 
@@ -221,15 +255,15 @@ export async function GET(request: NextRequest) {
       const bestRakuten = cheapest(rakutenResults);
       const bestYahoo = cheapest(yahooResults.items);
 
-      const amazonMallPrice: MallPrice | null =
-        keepaResult.price !== null && keepaResult.url
-          ? {
-              mall: "amazon" as const,
-              price: keepaResult.price,
-              url: keepaResult.url,
-              availability: "available" as const,
-            }
-          : null;
+      // Keepaで商品が見つかった場合はASINがある → Amazon行を必ず追加（価格なしでも「取扱なし」表示）
+      const amazonMallPrice: MallPrice | null = keepaResult.asin
+        ? {
+            mall: "amazon" as const,
+            price: keepaResult.price,
+            url: keepaResult.url ?? `https://www.amazon.co.jp/dp/${keepaResult.asin}`,
+            availability: keepaResult.availability,
+          }
+        : null;
 
       const prices: MallPrice[] = [
         ...(amazonMallPrice ? [amazonMallPrice] : []),
@@ -260,12 +294,12 @@ export async function GET(request: NextRequest) {
     }
 
     // ASIN検索: Amazon価格をKeepaから取得してresultに付与
-    if (type === "asin" && keepaResult.price !== null && keepaResult.url) {
+    if (type === "asin" && keepaResult.asin) {
       const amazonMallPrice: MallPrice = {
         mall: "amazon" as const,
         price: keepaResult.price,
-        url: keepaResult.url,
-        availability: "available" as const,
+        url: keepaResult.url ?? `https://www.amazon.co.jp/dp/${keepaResult.asin}`,
+        availability: keepaResult.availability,
       };
       const asinResult: ProductResult = {
         name: keepaResult.name ?? query,
