@@ -217,7 +217,7 @@ export async function GET(request: NextRequest) {
         headers: { Referer: siteUrl, Origin: siteUrl },
       }),
       searchYahoo(query, page),
-      keepaType ? searchKeepa(query, keepaType) : Promise.resolve<KeepaResult>({ price: null, asin: null, url: null, name: null, imageUrl: null }),
+      keepaType ? searchKeepa(query, keepaType) : Promise.resolve<KeepaResult>(KEEPA_NULL),
     ] as const);
 
     const rakutenData = await rakutenRes.json();
