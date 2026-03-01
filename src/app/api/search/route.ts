@@ -61,10 +61,13 @@ function priceFromCsv(csv: (number[] | null)[] | null | undefined): number | nul
   if (!csv) return null;
   for (const idx of [0, 1, 7, 2]) {
     const arr = csv[idx];
-    if (arr && arr.length >= 2) {
-      // 末尾要素が最新価格
-      const p = parseKeepaPrice(arr[arr.length - 1]);
-      if (p !== null) return p;
+    if (!arr || arr.length < 2) continue;
+    // csv は [keepa_time, price, keepa_time, price, ...] のペア配列
+    // 最新価格は末尾の奇数インデックス要素 (length が偶数前提)
+    // 末尾から逆順に価格(奇数位置)を探す
+    for (let i = arr.length - 1; i >= 1; i -= 2) {
+      const p = parseKeepaPrice(arr[i]);
+      if (p !== null) return p; // -1以外の有効な価格が見つかったら返す
     }
   }
   return null;
@@ -78,7 +81,7 @@ async function searchKeepa(identifier: string, type: "jan" | "asin"): Promise<Ke
     const url = new URL("https://api.keepa.com/product");
     url.searchParams.set("key", apiKey);
     url.searchParams.set("domain", "5"); // Amazon Japan
-    url.searchParams.set("stats", "1");  // stats.current で現在価格を取得
+    url.searchParams.set("stats", "90"); // 過去90日の統計でstats.currentを確実に取得
 
     if (type === "asin") {
       url.searchParams.set("asin", identifier);
@@ -94,7 +97,10 @@ async function searchKeepa(identifier: string, type: "jan" | "asin"): Promise<Ke
 
     const data = await res.json();
     const product = data.products?.[0];
-    if (!product) return KEEPA_NULL;
+    if (!product) {
+      console.warn("[Keepa] no product found for:", identifier, "type:", type, "tokensLeft:", data.tokensLeft);
+      return KEEPA_NULL;
+    }
 
     const asin = product.asin as string;
     const amazonUrl = `https://www.amazon.co.jp/dp/${asin}`;
@@ -103,10 +109,20 @@ async function searchKeepa(identifier: string, type: "jan" | "asin"): Promise<Ke
       ? `https://images-na.ssl-images-amazon.com/images/I/${product.imagesCSV.split(",")[0]}`
       : null;
 
-    // stats.current を優先、なければ csv の末尾値にフォールバック
-    const currentPrice =
-      priceFromStats(product.stats?.current) ??
-      priceFromCsv(product.csv);
+    // stats.current を優先、なければ csv のペア末尾値にフォールバック
+    const statsCurrent = product.stats?.current as number[] | null | undefined;
+    const priceFromSt = priceFromStats(statsCurrent);
+    const priceFromCv = priceFromCsv(product.csv as (number[] | null)[] | null | undefined);
+    const currentPrice = priceFromSt ?? priceFromCv;
+
+    console.log(
+      "[Keepa]",
+      asin,
+      "stats.current:", statsCurrent?.slice(0, 10),
+      "→ priceFromStats:", priceFromSt,
+      "/ priceFromCsv:", priceFromCv,
+      "/ final:", currentPrice
+    );
 
     return {
       price: currentPrice,
