@@ -59,16 +59,15 @@ function priceFromStats(current: number[] | null | undefined): number | null {
 
 function priceFromCsv(csv: (number[] | null)[] | null | undefined): number | null {
   if (!csv) return null;
+  // csv[idx] = [keepa_time, price, keepa_time, price, ...]
+  // 末尾が現在の状態: 正値=現在価格, -1=現在取扱なし
+  // 逆順探索は不可 (取扱なし商品の古い価格を誤検知する)
   for (const idx of [0, 1, 7, 2]) {
     const arr = csv[idx];
     if (!arr || arr.length < 2) continue;
-    // csv は [keepa_time, price, keepa_time, price, ...] のペア配列
-    // 最新価格は末尾の奇数インデックス要素 (length が偶数前提)
-    // 末尾から逆順に価格(奇数位置)を探す
-    for (let i = arr.length - 1; i >= 1; i -= 2) {
-      const p = parseKeepaPrice(arr[i]);
-      if (p !== null) return p; // -1以外の有効な価格が見つかったら返す
-    }
+    // 偶数長保証: 末尾インデックス(奇数) = 最新価格
+    const p = parseKeepaPrice(arr[arr.length - 1]);
+    if (p !== null) return p;
   }
   return null;
 }
