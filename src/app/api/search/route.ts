@@ -335,8 +335,47 @@ export async function GET(request: NextRequest) {
       });
     }
 
-    // 商品名検索: 楽天・Yahoo結果をそのまま混合表示
-    const results = [...rakutenResults, ...yahooResults.items];
+    // 商品名検索: Yahoo結果のJANコードでKeepaを並列ルックアップしてAmazon価格を付与
+    const uniqueJans = [
+      ...new Set(
+        yahooResults.items
+          .map((item) => item.jan)
+          .filter((jan): jan is string => typeof jan === "string" && /^\d{8,13}$/.test(jan))
+      ),
+    ].slice(0, 5); // Keepaトークン節約のため最大5件
+
+    const keepaByJan = new Map<string, KeepaResult>();
+    if (uniqueJans.length > 0) {
+      await Promise.all(
+        uniqueJans.map(async (jan) => {
+          const k = await searchKeepa(jan, "jan");
+          if (k.asin) keepaByJan.set(jan, k);
+        })
+      );
+    }
+
+    // Yahoo結果にAmazon価格を付与
+    const enrichedYahoo: ProductResult[] = yahooResults.items.map((item) => {
+      const keepa = item.jan ? keepaByJan.get(item.jan) : undefined;
+      if (!keepa) return item;
+      return {
+        ...item,
+        asin: keepa.asin ?? undefined,
+        imageUrl: keepa.imageUrl ?? item.imageUrl,
+        amazonPrice: keepa.price,
+        prices: [
+          {
+            mall: "amazon" as const,
+            price: keepa.price,
+            url: keepa.url ?? `https://www.amazon.co.jp/dp/${keepa.asin}`,
+            availability: keepa.availability,
+          },
+          ...item.prices,
+        ],
+      };
+    });
+
+    const results = [...rakutenResults, ...enrichedYahoo];
     return NextResponse.json({
       results,
       meta: {
