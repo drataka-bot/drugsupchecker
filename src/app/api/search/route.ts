@@ -48,7 +48,8 @@ function parseKeepaPrice(v: number | null | undefined): number | null {
 
 function priceFromStats(current: number[] | null | undefined): number | null {
   if (!current) return null;
-  for (const idx of [0, 1, 7, 2]) {
+  // idx 0=Amazon, 7=BuyBox, 1=New 3rd party (index 2=Used は除外)
+  for (const idx of [0, 7, 1]) {
     const p = parseKeepaPrice(current[idx]);
     if (p !== null) return p;
   }
@@ -57,13 +58,19 @@ function priceFromStats(current: number[] | null | undefined): number | null {
 
 function priceFromCsv(csv: (number[] | null)[] | null | undefined): number | null {
   if (!csv) return null;
-  for (const idx of [0, 1, 7, 2]) {
+  // idx 0=Amazon, 7=BuyBox, 1=New 3rd party (index 2=Used は除外)
+  for (const idx of [0, 7, 1]) {
     const arr = csv[idx];
     if (!arr || arr.length < 2) continue;
     const p = parseKeepaPrice(arr[arr.length - 1]);
     if (p !== null) return p;
   }
   return null;
+}
+
+// 中古品判定
+function isUsedItem(name: string): boolean {
+  return /中古|ユーズド|used|USED|junk|ジャンク|訳あり|難あり|傷あり/i.test(name);
 }
 
 // ─────────────────────────────────────────────────────────────────
@@ -229,7 +236,7 @@ async function searchYahoo(query: string, page: number): Promise<YahooResult> {
       return { items: [], total: 0, shown: 0 };
     }
     const data = await res.json();
-    const hits: YahooHit[] = data.hits || [];
+    const hits: YahooHit[] = (data.hits || []).filter((h: YahooHit) => !isUsedItem(h.name));
 
     return {
       items: hits.map((h) => ({
@@ -303,15 +310,74 @@ export async function GET(request: NextRequest) {
 
       // Keepa未設定 or 結果なし → Yahoo検索フォールバック
       const yahooFallback = await searchYahoo(query, page);
-      const yahooPageCount = Math.ceil(yahooFallback.total / hitsPerPage);
+      if (yahooFallback.items.length > 0) {
+        const yahooPageCount = Math.ceil(yahooFallback.total / hitsPerPage);
+        return NextResponse.json({
+          results: yahooFallback.items,
+          meta: {
+            mode: "discover",
+            rakuten: { total: 0, shown: 0, hasMore: false },
+            yahoo: { total: yahooFallback.total, shown: yahooFallback.shown, hasMore: page < yahooPageCount },
+            page,
+            hasMore: page < yahooPageCount,
+          },
+        });
+      }
+
+      // Yahoo未設定 or 結果なし → Rakuten検索フォールバック
+      const rakutenAppId = process.env.RAKUTEN_APP_ID;
+      const rakutenAccessKey = process.env.RAKUTEN_ACCESS_KEY;
+      if (rakutenAppId && rakutenAccessKey) {
+        try {
+          const rakutenDiscoverUrl = new URL("https://openapi.rakuten.co.jp/ichibams/api/IchibaItem/Search/20220601");
+          rakutenDiscoverUrl.searchParams.set("applicationId", rakutenAppId);
+          rakutenDiscoverUrl.searchParams.set("accessKey", rakutenAccessKey);
+          rakutenDiscoverUrl.searchParams.set("keyword", query);
+          rakutenDiscoverUrl.searchParams.set("hits", "30");
+          rakutenDiscoverUrl.searchParams.set("page", "1");
+          rakutenDiscoverUrl.searchParams.set("format", "json");
+          rakutenDiscoverUrl.searchParams.set("sort", "+itemPrice");
+
+          const rakutenDiscoverRes = await fetch(rakutenDiscoverUrl.toString(), {
+            headers: { Referer: siteUrl, Origin: siteUrl },
+          });
+          if (rakutenDiscoverRes.ok) {
+            const rakutenDiscoverData = await rakutenDiscoverRes.json();
+            const rakutenItems: ProductResult[] = (rakutenDiscoverData.Items || [])
+              .filter((item: RakutenItem) => !isUsedItem(item.Item.itemName))
+              .map((item: RakutenItem) => ({
+                name: item.Item.itemName,
+                imageUrl: item.Item.mediumImageUrls?.[0]?.imageUrl,
+                amazonPrice: null,
+                prices: [],
+              }));
+            if (rakutenItems.length > 0) {
+              return NextResponse.json({
+                results: rakutenItems,
+                meta: {
+                  mode: "discover",
+                  rakuten: { total: rakutenDiscoverData.count ?? rakutenItems.length, shown: rakutenItems.length, hasMore: false },
+                  yahoo: { total: 0, shown: 0, hasMore: false },
+                  page: 1,
+                  hasMore: false,
+                },
+              });
+            }
+          }
+        } catch (e) {
+          console.error("[Rakuten/discover] error:", e);
+        }
+      }
+
+      // 全API結果なし
       return NextResponse.json({
-        results: yahooFallback.items,
+        results: [],
         meta: {
           mode: "discover",
           rakuten: { total: 0, shown: 0, hasMore: false },
-          yahoo: { total: yahooFallback.total, shown: yahooFallback.shown, hasMore: page < yahooPageCount },
-          page,
-          hasMore: page < yahooPageCount,
+          yahoo: { total: 0, shown: 0, hasMore: false },
+          page: 1,
+          hasMore: false,
         },
       });
     }
@@ -351,20 +417,22 @@ export async function GET(request: NextRequest) {
       );
     }
 
-    const rakutenResults: ProductResult[] = (rakutenData.Items || []).map((item: RakutenItem) => ({
-      name: item.Item.itemName,
-      jan: type === "jan" ? query : undefined,
-      imageUrl: item.Item.mediumImageUrls?.[0]?.imageUrl,
-      amazonPrice: null,
-      prices: [
-        {
-          mall: "rakuten" as const,
-          price: item.Item.itemPrice,
-          url: item.Item.itemUrl,
-          availability: "available" as const,
-        },
-      ],
-    }));
+    const rakutenResults: ProductResult[] = (rakutenData.Items || [])
+      .filter((item: RakutenItem) => !isUsedItem(item.Item.itemName))
+      .map((item: RakutenItem) => ({
+        name: item.Item.itemName,
+        jan: type === "jan" ? query : undefined,
+        imageUrl: item.Item.mediumImageUrls?.[0]?.imageUrl,
+        amazonPrice: null,
+        prices: [
+          {
+            mall: "rakuten" as const,
+            price: item.Item.itemPrice,
+            url: item.Item.itemUrl,
+            availability: "available" as const,
+          },
+        ],
+      }));
 
     const rakutenTotal: number = rakutenData.count ?? rakutenResults.length;
     const rakutenPageCount: number = rakutenData.pageCount ?? Math.ceil(rakutenTotal / hitsPerPage);
