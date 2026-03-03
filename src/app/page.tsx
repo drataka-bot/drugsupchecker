@@ -3,6 +3,8 @@
 import { useState, useEffect } from "react";
 import SearchForm from "@/components/SearchForm";
 import PriceTable from "@/components/PriceTable";
+import ProductPickerCard from "@/components/ProductPickerCard";
+import FlatPriceList from "@/components/FlatPriceList";
 import { ProductResult, SearchQuery } from "@/lib/types";
 
 const FAVORITES_KEY = "drugsup_favorites";
@@ -35,6 +37,7 @@ export default function Home() {
   const [tab, setTab] = useState<"search" | "favorites">("search");
   const [favorites, setFavorites] = useState<ProductResult[]>([]);
   const [searchMeta, setSearchMeta] = useState<{
+    mode: "discover" | "compare";
     rakuten: { total: number; shown: number; hasMore: boolean };
     yahoo: { total: number; shown: number; hasMore: boolean };
     page: number;
@@ -42,6 +45,7 @@ export default function Home() {
   } | null>(null);
   const [currentQuery, setCurrentQuery] = useState<SearchQuery | null>(null);
   const [isLoadingMore, setIsLoadingMore] = useState(false);
+  const [isMultiSearch, setIsMultiSearch] = useState(false);
 
   useEffect(() => {
     setFavorites(loadFavorites());
@@ -54,6 +58,7 @@ export default function Home() {
     setTab("search");
     setSearchMeta(null);
     setCurrentQuery(query);
+    setIsMultiSearch(false);
 
     try {
       // 複数コード（JAN/ASIN）を並列検索
@@ -75,13 +80,20 @@ export default function Home() {
             r.status === "fulfilled" ? (r.value.results ?? []) : []
           );
           setResults(allResults);
-          setSearchMeta(null);
+          setSearchMeta({
+            mode: "compare",
+            rakuten: { total: 0, shown: 0, hasMore: false },
+            yahoo: { total: 0, shown: 0, hasMore: false },
+            page: 1,
+            hasMore: false,
+          });
+          setIsMultiSearch(true);
           setSearched(true);
           return;
         }
       }
 
-      // 単一検索（従来）
+      // 単一検索
       const params = new URLSearchParams({ query: query.query, type: query.type });
       const res = await fetch(`/api/search?${params}`);
       if (!res.ok) {
@@ -97,6 +109,14 @@ export default function Home() {
     } finally {
       setIsLoading(false);
     }
+  };
+
+  // discover モードで「価格を比較する」ボタンを押したとき
+  const handleCompareFromDiscover = (result: ProductResult) => {
+    const code = result.jan || result.asin;
+    if (!code) return;
+    const type: SearchQuery["type"] = result.jan ? "jan" : "asin";
+    handleSearch({ query: code, type });
   };
 
   const handleLoadMore = async () => {
@@ -131,6 +151,7 @@ export default function Home() {
     });
   };
 
+  const isDiscoverMode = searchMeta?.mode === "discover";
   const displayResults = tab === "favorites" ? favorites : results;
 
   return (
@@ -143,20 +164,22 @@ export default function Home() {
               <h1 className="text-xl font-bold text-gray-900">価格チェッカー</h1>
               <p className="text-xs text-gray-500 mt-0.5">複数モールの価格を比較・利益計算</p>
             </div>
-            {/* ハイライト閾値設定 */}
-            <div className="flex items-center gap-2 text-sm">
-              <label className="text-gray-600 whitespace-nowrap">ハイライト</label>
-              <select
-                value={threshold}
-                onChange={(e) => setThreshold(Number(e.target.value))}
-                className="border border-gray-300 rounded px-2 py-1 text-sm text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-500"
-              >
-                <option value={5}>5%以上</option>
-                <option value={10}>10%以上</option>
-                <option value={15}>15%以上</option>
-                <option value={20}>20%以上</option>
-              </select>
-            </div>
+            {/* ハイライト閾値設定（比較モードのみ） */}
+            {!isDiscoverMode && (
+              <div className="flex items-center gap-2 text-sm">
+                <label className="text-gray-600 whitespace-nowrap">ハイライト</label>
+                <select
+                  value={threshold}
+                  onChange={(e) => setThreshold(Number(e.target.value))}
+                  className="border border-gray-300 rounded px-2 py-1 text-sm text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                >
+                  <option value={5}>5%以上</option>
+                  <option value={10}>10%以上</option>
+                  <option value={15}>15%以上</option>
+                  <option value={20}>20%以上</option>
+                </select>
+              </div>
+            )}
           </div>
           <SearchForm onSearch={handleSearch} isLoading={isLoading} />
 
@@ -170,7 +193,7 @@ export default function Home() {
                   : "text-gray-500 hover:bg-gray-100"
               }`}
             >
-              検索結果
+              {isDiscoverMode ? "🔍 検索結果" : "検索結果"}
               {searched && results.length > 0 && (
                 <span className="ml-1.5 text-xs opacity-75">({results.length})</span>
               )}
@@ -198,7 +221,9 @@ export default function Home() {
         {isLoading && (
           <div className="text-center py-16">
             <div className="inline-block w-8 h-8 border-4 border-blue-500 border-t-transparent rounded-full animate-spin" />
-            <p className="mt-3 text-gray-500 text-sm">各モールを検索中...</p>
+            <p className="mt-3 text-gray-500 text-sm">
+              {currentQuery?.type === "name" ? "商品を検索中..." : "各モールを検索中..."}
+            </p>
           </div>
         )}
 
@@ -218,8 +243,8 @@ export default function Home() {
           </div>
         )}
 
-        {/* 検索件数バッジ */}
-        {tab === "search" && !isLoading && searched && searchMeta && (
+        {/* 検索件数バッジ（比較モードのみ） */}
+        {tab === "search" && !isLoading && searched && searchMeta && !isDiscoverMode && (
           <div className="flex flex-wrap gap-2 mb-3 text-xs">
             <span className="bg-pink-50 border border-pink-200 text-pink-700 px-2.5 py-1 rounded-full">
               楽天: {searchMeta.rakuten.shown}件表示 / 約{searchMeta.rakuten.total.toLocaleString()}件ヒット
@@ -236,8 +261,8 @@ export default function Home() {
           </div>
         )}
 
-        {/* 凡例 */}
-        {!isLoading && displayResults.length > 0 && (
+        {/* 凡例（比較モードのみ） */}
+        {!isLoading && !isDiscoverMode && displayResults.length > 0 && tab !== "favorites" && (
           <div className="flex flex-wrap gap-3 mb-4 text-xs text-gray-600">
             <span className="flex items-center gap-1">
               <span className="inline-block w-3 h-3 rounded bg-green-100 border border-green-300" />
@@ -254,38 +279,94 @@ export default function Home() {
           </div>
         )}
 
-        {/* 結果 */}
-        {!isLoading && (
-          displayResults.length === 0 && (tab === "search" && searched) ? (
-            <div className="text-center py-16 text-gray-500">
-              <p className="text-lg">商品が見つかりませんでした</p>
-              <p className="text-sm mt-1">別のキーワードやJANコードで試してください</p>
-            </div>
-          ) : (
-            <div className="flex flex-col gap-4">
-              {displayResults.length > 0 && (
-                <p className="text-sm text-gray-500">{displayResults.length}件</p>
-              )}
-              {displayResults.map((result, i) => (
-                <PriceTable
-                  key={i}
-                  result={result}
-                  thresholdPercent={threshold}
-                  isFavorited={favorites.some((f) => isSameProduct(f, result))}
-                  onToggleFavorite={handleToggleFavorite}
-                />
-              ))}
-              {tab === "search" && searchMeta?.hasMore && (
-                <button
-                  onClick={handleLoadMore}
-                  disabled={isLoadingMore}
-                  className="w-full py-3 rounded-lg border border-gray-300 text-sm text-gray-600 hover:bg-gray-100 disabled:opacity-50 transition-colors"
-                >
-                  {isLoadingMore ? "読み込み中..." : "もっと見る"}
-                </button>
-              )}
-            </div>
-          )
+        {/* お気に入りタブ: 比較カード表示 */}
+        {tab === "favorites" && favorites.length > 0 && (
+          <div className="flex flex-col gap-4">
+            <p className="text-sm text-gray-500">{favorites.length}件</p>
+            {favorites.map((result, i) => (
+              <PriceTable
+                key={i}
+                result={result}
+                thresholdPercent={threshold}
+                isFavorited={true}
+                onToggleFavorite={handleToggleFavorite}
+              />
+            ))}
+          </div>
+        )}
+
+        {/* 検索結果 */}
+        {!isLoading && tab === "search" && (
+          <>
+            {/* discover モード: 商品グリッド */}
+            {isDiscoverMode && searched && (
+              results.length === 0 ? (
+                <div className="text-center py-16 text-gray-500">
+                  <p className="text-lg">商品が見つかりませんでした</p>
+                  <p className="text-sm mt-1">別のキーワードで試してください</p>
+                </div>
+              ) : (
+                <div>
+                  <p className="text-sm text-gray-500 mb-3">{results.length}件の商品が見つかりました</p>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    {results.map((result, i) => (
+                      <ProductPickerCard
+                        key={i}
+                        result={result}
+                        onCompare={handleCompareFromDiscover}
+                      />
+                    ))}
+                  </div>
+                  {searchMeta?.hasMore && (
+                    <button
+                      onClick={handleLoadMore}
+                      disabled={isLoadingMore}
+                      className="w-full mt-4 py-3 rounded-lg border border-gray-300 text-sm text-gray-600 hover:bg-gray-100 disabled:opacity-50 transition-colors"
+                    >
+                      {isLoadingMore ? "読み込み中..." : "もっと見る"}
+                    </button>
+                  )}
+                </div>
+              )
+            )}
+
+            {/* compare モード: 価格テーブル or 複数JAN安い順リスト */}
+            {!isDiscoverMode && (
+              displayResults.length === 0 && searched ? (
+                <div className="text-center py-16 text-gray-500">
+                  <p className="text-lg">商品が見つかりませんでした</p>
+                  <p className="text-sm mt-1">別のキーワードやJANコードで試してください</p>
+                </div>
+              ) : isMultiSearch ? (
+                // 複数JAN: 全サイト合算で安い順フラットリスト
+                <FlatPriceList results={displayResults} />
+              ) : (
+                <div className="flex flex-col gap-4">
+                  {displayResults.length > 0 && (
+                    <p className="text-sm text-gray-500">{displayResults.length}件</p>
+                  )}
+                  {displayResults.map((result, i) => (
+                    <PriceTable
+                      key={i}
+                      result={result}
+                      thresholdPercent={threshold}
+                      isFavorited={favorites.some((f) => isSameProduct(f, result))}
+                      onToggleFavorite={handleToggleFavorite}
+                    />
+                  ))}
+                  {searchMeta?.hasMore && (
+                    <button
+                      onClick={handleLoadMore}
+                      disabled={isLoadingMore}
+                      className="w-full py-3 rounded-lg border border-gray-300 text-sm text-gray-600 hover:bg-gray-100 disabled:opacity-50 transition-colors"
+                    >
+                      {isLoadingMore ? "読み込み中..." : "もっと見る"}
+                    </button>
+                  )}
+                </div>
+              )
+            )}
+          </>
         )}
 
         {/* 初期状態 */}
@@ -294,8 +375,8 @@ export default function Home() {
             <p className="text-4xl mb-4">🔍</p>
             <p className="text-lg font-medium text-gray-500">商品を検索してください</p>
             <p className="text-sm mt-2 max-w-sm mx-auto">
-              JANコード（13桁）・ASIN・商品名を入力すると<br />
-              各モールの価格を比較します
+              <strong>商品を探す</strong>: 商品名で検索してJAN/ASINを確認<br />
+              <strong>価格を比較する</strong>: JAN・ASINで各モールの価格を比較
             </p>
           </div>
         )}
