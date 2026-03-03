@@ -153,14 +153,14 @@ function PriceRow({
       </td>
 
       <td className="py-3 px-4 text-center">
-        {mallPrice.availability !== "unavailable" && mallPrice.price !== null && (
+        {mallPrice.availability !== "unavailable" && (
           <a
             href={mallPrice.url}
             target="_blank"
             rel="noopener noreferrer"
             className="inline-flex items-center gap-1 text-xs text-blue-600 hover:text-blue-800 hover:underline"
           >
-            商品ページ
+            {mallPrice.price === null ? "Amazonで確認" : "商品ページ"}
             <ExternalLink size={12} />
           </a>
         )}
@@ -306,7 +306,9 @@ export default function PriceTable({
   const amazonEntry = allPrices.find((p) => p.mall === "amazon") ?? {
     mall: "amazon" as Mall,
     price: result.amazonPrice,
-    url: "#",
+    url: result.asin
+      ? `https://www.amazon.co.jp/dp/${result.asin}`
+      : `https://www.amazon.co.jp/s?k=${encodeURIComponent(result.name)}`,
     availability: "unknown" as const,
   };
 
