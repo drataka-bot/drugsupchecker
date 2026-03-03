@@ -110,16 +110,22 @@ async function searchKeepaByTermMultiple(term: string): Promise<ProductResult[]>
 
     console.log("[Keepa/search]", `"${term}"`, "→", products.length, "products");
 
-    return products.map((p) => ({
-      name: (p.title as string) || (p.asin as string),
-      asin: p.asin as string,
-      jan: typeof p.ean === "string" && /^\d{8,13}$/.test(p.ean) ? p.ean : undefined,
-      imageUrl: p.imagesCSV
-        ? `https://images-na.ssl-images-amazon.com/images/I/${(p.imagesCSV as string).split(",")[0]}`
-        : undefined,
-      amazonPrice: priceFromStats(p.stats?.current) ?? priceFromCsv(p.csv),
-      prices: [],
-    }));
+    return products.map((p) => {
+      const eanSingle = typeof p.ean === "string" && /^\d{8,13}$/.test(p.ean) ? p.ean : undefined;
+      const eanFromList = !eanSingle && Array.isArray(p.eanList)
+        ? (p.eanList as string[]).find((e) => typeof e === "string" && /^\d{8,13}$/.test(e))
+        : undefined;
+      return {
+        name: (p.title as string) || (p.asin as string),
+        asin: p.asin as string,
+        jan: eanSingle ?? eanFromList,
+        imageUrl: p.imagesCSV
+          ? `https://images-na.ssl-images-amazon.com/images/I/${(p.imagesCSV as string).split(",")[0]}`
+          : undefined,
+        amazonPrice: priceFromStats(p.stats?.current) ?? priceFromCsv(p.csv),
+        prices: [],
+      };
+    });
   } catch (e) {
     console.error("[Keepa/search/multi] error:", e);
     return [];
@@ -271,18 +277,13 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: "query is required" }, { status: 400 });
   }
 
-  const appId = process.env.RAKUTEN_APP_ID;
-  const accessKey = process.env.RAKUTEN_ACCESS_KEY;
-  if (!appId || !accessKey) {
-    return NextResponse.json({ error: "API key not configured" }, { status: 500 });
-  }
-
   const hitsPerPage = 30;
   const siteUrl = process.env.NEXT_PUBLIC_SITE_URL || "https://drugsupchecker.vercel.app";
 
   try {
     // ═══════════════════════════════════════════════════════════
     // discover モード: 商品名検索 → JAN/ASIN を含む商品リスト
+    // Rakuten APIキー不要
     // ═══════════════════════════════════════════════════════════
     if (type === "name") {
       // Keepaで商品リスト取得 (ASIN+EAN+Amazon参考価格)
@@ -318,6 +319,12 @@ export async function GET(request: NextRequest) {
     // ═══════════════════════════════════════════════════════════
     // compare モード: JAN/ASIN → Amazon+楽天+Yahoo 価格比較
     // ═══════════════════════════════════════════════════════════
+    const appId = process.env.RAKUTEN_APP_ID;
+    const accessKey = process.env.RAKUTEN_ACCESS_KEY;
+    if (!appId || !accessKey) {
+      return NextResponse.json({ error: "API key not configured" }, { status: 500 });
+    }
+
     const keepaType = type === "jan" ? "jan" : type === "asin" ? "asin" : null;
 
     const rakutenUrl = new URL("https://openapi.rakuten.co.jp/ichibams/api/IchibaItem/Search/20220601");
