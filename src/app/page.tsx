@@ -56,6 +56,32 @@ export default function Home() {
     setCurrentQuery(query);
 
     try {
+      // 複数コード（JAN/ASIN）を並列検索
+      if (query.type === "jan" || query.type === "asin") {
+        const codes = query.query
+          .split(/[\s,、\n]+/)
+          .map((v) => v.trim())
+          .filter(Boolean);
+
+        if (codes.length > 1) {
+          const targets = codes.slice(0, 10); // 最大10件
+          const searches = targets.map((code) =>
+            fetch(`/api/search?${new URLSearchParams({ query: code, type: query.type })}`)
+              .then((r) => r.json())
+              .catch(() => ({ results: [] }))
+          );
+          const responses = await Promise.allSettled(searches);
+          const allResults: ProductResult[] = responses.flatMap((r) =>
+            r.status === "fulfilled" ? (r.value.results ?? []) : []
+          );
+          setResults(allResults);
+          setSearchMeta(null);
+          setSearched(true);
+          return;
+        }
+      }
+
+      // 単一検索（従来）
       const params = new URLSearchParams({ query: query.query, type: query.type });
       const res = await fetch(`/api/search?${params}`);
       if (!res.ok) {
