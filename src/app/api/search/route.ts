@@ -79,8 +79,9 @@ async function searchKeepa(identifier: string, type: "jan" | "asin"): Promise<Ke
   try {
     const url = new URL("https://api.keepa.com/product");
     url.searchParams.set("key", apiKey);
-    url.searchParams.set("domain", "5"); // Amazon Japan
-    url.searchParams.set("stats", "90"); // 過去90日の統計でstats.currentを確実に取得
+    url.searchParams.set("domain", "5");   // Amazon Japan
+    url.searchParams.set("stats", "1");    // stats.current (現在価格) だけ取得
+    url.searchParams.set("history", "0"); // CSV価格履歴を省略 → 応答高速化
 
     if (type === "asin") {
       url.searchParams.set("asin", identifier);
