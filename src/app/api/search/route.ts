@@ -37,6 +37,78 @@ interface KeepaResult {
 
 const KEEPA_NULL = { price: null, availability: "unknown" as const, asin: null, url: null, name: null, imageUrl: null };
 
+interface KeepaTermResult {
+  asin: string | null;
+  ean: string | null;
+  price: number | null;
+  name: string | null;
+  imageUrl: string | null;
+}
+const KEEPA_TERM_NULL: KeepaTermResult = { asin: null, ean: null, price: null, name: null, imageUrl: null };
+
+/**
+ * 商品名 → Keepa 検索 → ASIN → 商品詳細 (EAN/JAN + 価格)
+ * 2ステップ: /search (keyword→ASIN) → /product (ASIN→詳細)
+ */
+async function searchKeepaByTerm(term: string): Promise<KeepaTermResult> {
+  const apiKey = process.env.KEEPA_API_KEY;
+  if (!apiKey) return KEEPA_TERM_NULL;
+
+  try {
+    // Step 1: keyword → ASIN list
+    const searchUrl = new URL("https://api.keepa.com/search");
+    searchUrl.searchParams.set("key", apiKey);
+    searchUrl.searchParams.set("domain", "5");
+    searchUrl.searchParams.set("type", "product");
+    searchUrl.searchParams.set("term", term);
+
+    const searchRes = await fetch(searchUrl.toString());
+    if (!searchRes.ok) {
+      console.error("[Keepa/search] error:", searchRes.status, await searchRes.text());
+      return KEEPA_TERM_NULL;
+    }
+    const searchData = await searchRes.json();
+    const asinList: string[] = searchData.searchResult?.asinList ?? [];
+    if (asinList.length === 0) {
+      console.warn("[Keepa/search] no results for:", term);
+      return KEEPA_TERM_NULL;
+    }
+    const topAsin = asinList[0];
+
+    // Step 2: ASIN → 商品詳細 (EAN/JAN + 価格 + 画像)
+    const prodUrl = new URL("https://api.keepa.com/product");
+    prodUrl.searchParams.set("key", apiKey);
+    prodUrl.searchParams.set("domain", "5");
+    prodUrl.searchParams.set("stats", "180");
+    prodUrl.searchParams.set("asin", topAsin);
+
+    const prodRes = await fetch(prodUrl.toString());
+    if (!prodRes.ok) {
+      console.error("[Keepa/product] error:", prodRes.status);
+      return { asin: topAsin, ean: null, price: null, name: null, imageUrl: null };
+    }
+    const prodData = await prodRes.json();
+    const product = prodData.products?.[0];
+    if (!product) return { asin: topAsin, ean: null, price: null, name: null, imageUrl: null };
+
+    const ean: string | null =
+      typeof product.ean === "string" && /^\d{8,13}$/.test(product.ean) ? product.ean : null;
+    const price =
+      priceFromStats(product.stats?.current as number[] | null | undefined) ??
+      priceFromCsv(product.csv as (number[] | null)[] | null | undefined);
+    const name: string | null = (product.title as string) ?? null;
+    const imageUrl: string | null = product.imagesCSV
+      ? `https://images-na.ssl-images-amazon.com/images/I/${(product.imagesCSV as string).split(",")[0]}`
+      : null;
+
+    console.log("[Keepa/search]", `"${term}"`, "→ ASIN:", topAsin, "EAN:", ean, "price:", price);
+    return { asin: topAsin, ean, price, name, imageUrl };
+  } catch (e) {
+    console.error("[Keepa/search] exception:", e);
+    return KEEPA_TERM_NULL;
+  }
+}
+
 /**
  * Keepa価格パース (JPY は * 100 で格納: 198000 → ¥1,980)
  * csv形式: [keepa_time, price, keepa_time, price, ...]
@@ -214,25 +286,35 @@ export async function GET(request: NextRequest) {
   const hitsPerPage = 30;
 
   try {
+    const siteUrl = process.env.NEXT_PUBLIC_SITE_URL || "https://drugsupchecker.vercel.app";
+    const keepaType = type === "jan" ? "jan" : type === "asin" ? "asin" : null;
+
+    // 商品名検索: Keepaでキーワード → EAN/JAN 変換してから精度の高い検索
+    let keepaTermResult: KeepaTermResult = KEEPA_TERM_NULL;
+    let effectiveQuery = query;
+    if (!keepaType) {
+      keepaTermResult = await searchKeepaByTerm(query);
+      if (keepaTermResult.ean) {
+        effectiveQuery = keepaTermResult.ean;        // EAN確定 → 最精度
+      } else if (keepaTermResult.name) {
+        effectiveQuery = keepaTermResult.name;       // EAN未取得 → Keepa正式商品名で再検索
+      }
+    }
+
     const rakutenUrl = new URL("https://openapi.rakuten.co.jp/ichibams/api/IchibaItem/Search/20220601");
     rakutenUrl.searchParams.set("applicationId", appId);
     rakutenUrl.searchParams.set("accessKey", accessKey);
-    rakutenUrl.searchParams.set("keyword", query);
+    rakutenUrl.searchParams.set("keyword", effectiveQuery);
     rakutenUrl.searchParams.set("hits", String(hitsPerPage));
     rakutenUrl.searchParams.set("page", String(page));
     rakutenUrl.searchParams.set("format", "json");
     rakutenUrl.searchParams.set("sort", "+itemPrice");
 
-    const siteUrl = process.env.NEXT_PUBLIC_SITE_URL || "https://drugsupchecker.vercel.app";
-
-    // JANコード・ASIN検索時は Keepa も並列実行
-    const keepaType = type === "jan" ? "jan" : type === "asin" ? "asin" : null;
-
     const [rakutenRes, yahooResults, keepaResult] = await Promise.all([
       fetch(rakutenUrl.toString(), {
         headers: { Referer: siteUrl, Origin: siteUrl },
       }),
-      searchYahoo(query, page),
+      searchYahoo(effectiveQuery, page),
       keepaType ? searchKeepa(query, keepaType) : Promise.resolve<KeepaResult>(KEEPA_NULL),
     ] as const);
 
@@ -335,14 +417,54 @@ export async function GET(request: NextRequest) {
       });
     }
 
-    // 商品名検索: Yahoo結果のJANコードでKeepaを並列ルックアップしてAmazon価格を付与
+    // 商品名検索: Keepaで商品特定済み → JANカードと同形式で1枚に統合
+    if (keepaTermResult.asin) {
+      const bestRakuten = cheapest(rakutenResults);
+      const bestYahoo = cheapest(yahooResults.items);
+
+      const amazonMallPrice: MallPrice = {
+        mall: "amazon" as const,
+        price: keepaTermResult.price,
+        url: `https://www.amazon.co.jp/dp/${keepaTermResult.asin}`,
+        availability: keepaTermResult.price !== null ? "available" : "unavailable",
+      };
+
+      const prices: MallPrice[] = [
+        amazonMallPrice,
+        ...(bestRakuten ? bestRakuten.prices : []),
+        ...(bestYahoo ? bestYahoo.prices : []),
+      ];
+
+      const merged: ProductResult | null = prices.length > 0
+        ? {
+            name: keepaTermResult.name ?? bestRakuten?.name ?? bestYahoo?.name ?? query,
+            jan: keepaTermResult.ean ?? undefined,
+            asin: keepaTermResult.asin,
+            imageUrl: keepaTermResult.imageUrl ?? bestRakuten?.imageUrl ?? bestYahoo?.imageUrl,
+            amazonPrice: keepaTermResult.price,
+            prices,
+          }
+        : null;
+
+      return NextResponse.json({
+        results: merged ? [merged] : [],
+        meta: {
+          rakuten: { total: rakutenTotal, shown: rakutenResults.length, hasMore: false },
+          yahoo: { total: yahooTotal, shown: yahooResults.shown, hasMore: false },
+          page: 1,
+          hasMore: false,
+        },
+      });
+    }
+
+    // Keepa未設定 or 商品未発見 → キーワード結果をそのまま返す (Yahoo JAN enrichment付き)
     const uniqueJans = [
       ...new Set(
         yahooResults.items
           .map((item) => item.jan)
           .filter((jan): jan is string => typeof jan === "string" && /^\d{8,13}$/.test(jan))
       ),
-    ].slice(0, 5); // Keepaトークン節約のため最大5件
+    ].slice(0, 5);
 
     const keepaByJan = new Map<string, KeepaResult>();
     if (uniqueJans.length > 0) {
@@ -354,7 +476,6 @@ export async function GET(request: NextRequest) {
       );
     }
 
-    // Yahoo結果にAmazon価格を付与
     const enrichedYahoo: ProductResult[] = yahooResults.items.map((item) => {
       const keepa = item.jan ? keepaByJan.get(item.jan) : undefined;
       if (!keepa) return item;
