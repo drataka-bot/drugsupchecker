@@ -153,7 +153,7 @@ function PriceRow({
       </td>
 
       <td className="py-3 px-4 text-center">
-        {mallPrice.availability !== "unavailable" && (
+        {mallPrice.url && mallPrice.url !== "#" && (
           <a
             href={mallPrice.url}
             target="_blank"

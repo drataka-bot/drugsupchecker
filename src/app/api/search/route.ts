@@ -168,13 +168,24 @@ async function searchKeepa(identifier: string, type: "jan" | "asin"): Promise<Ke
     const statsCurrent = product.stats?.current as number[] | null | undefined;
     const priceFromSt = priceFromStats(statsCurrent);
     const priceFromCv = priceFromCsv(product.csv as (number[] | null)[] | null | undefined);
-    const currentPrice = priceFromSt ?? priceFromCv;
+    // buyBoxPrice: stats.buyBoxPrice は Buy Box の直接価格
+    const buyBoxRaw = product.stats?.buyBoxPrice as number | null | undefined;
+    const buyBoxPrice = parseKeepaPrice(buyBoxRaw);
+    const currentPrice = priceFromSt ?? buyBoxPrice ?? priceFromCv;
 
-    console.log("[Keepa]", asin, "→", currentPrice);
+    // デバッグ: Keepaが返した生データを確認
+    console.log("[Keepa]", asin, "→ price:", currentPrice,
+      "| stats.current:", JSON.stringify(statsCurrent?.slice(0, 10)),
+      "| csv[0]last:", (product.csv?.[0] as number[] | null)?.slice(-2),
+      "| csv[1]last:", (product.csv?.[1] as number[] | null)?.slice(-2),
+      "| csv[7]last:", (product.csv?.[7] as number[] | null)?.slice(-2),
+    );
 
     return {
       price: currentPrice,
-      availability: currentPrice !== null ? "available" : "unavailable",
+      // ASIN が判明している場合は "unknown" にして商品ページリンクを表示する
+      // "unavailable" にするとリンクが非表示になってしまうため使わない
+      availability: currentPrice !== null ? "available" : "unknown",
       asin,
       url: `https://www.amazon.co.jp/dp/${asin}`,
       name,
