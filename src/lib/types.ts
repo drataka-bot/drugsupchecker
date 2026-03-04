@@ -43,7 +43,7 @@ export interface ProductResult {
 
 export interface SearchQuery {
   query: string;
-  type: "jan" | "asin" | "name";
+  type: "jan" | "asin" | "name" | "keyword";
 }
 
 export interface HighlightConfig {

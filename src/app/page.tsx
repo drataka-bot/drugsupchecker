@@ -114,9 +114,13 @@ export default function Home() {
   // discover モードで「価格を比較する」ボタンを押したとき
   const handleCompareFromDiscover = (result: ProductResult) => {
     const code = result.jan || result.asin;
-    if (!code) return;
-    const type: SearchQuery["type"] = result.jan ? "jan" : "asin";
-    handleSearch({ query: code, type });
+    if (code) {
+      const type: SearchQuery["type"] = result.jan ? "jan" : "asin";
+      handleSearch({ query: code, type });
+    } else {
+      // JAN/ASIN不明 → 商品名でキーワード比較
+      handleSearch({ query: result.name, type: "keyword" });
+    }
   };
 
   const handleLoadMore = async () => {

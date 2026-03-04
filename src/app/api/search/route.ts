@@ -328,44 +328,50 @@ export async function GET(request: NextRequest) {
       const rakutenAppId = process.env.RAKUTEN_APP_ID;
       const rakutenAccessKey = process.env.RAKUTEN_ACCESS_KEY;
       if (rakutenAppId && rakutenAccessKey) {
-        try {
-          const rakutenDiscoverUrl = new URL("https://openapi.rakuten.co.jp/ichibams/api/IchibaItem/Search/20220601");
-          rakutenDiscoverUrl.searchParams.set("applicationId", rakutenAppId);
-          rakutenDiscoverUrl.searchParams.set("accessKey", rakutenAccessKey);
-          rakutenDiscoverUrl.searchParams.set("keyword", query);
-          rakutenDiscoverUrl.searchParams.set("hits", "30");
-          rakutenDiscoverUrl.searchParams.set("page", "1");
-          rakutenDiscoverUrl.searchParams.set("format", "json");
-          rakutenDiscoverUrl.searchParams.set("sort", "+itemPrice");
+        // 部分一致: まず完全クエリで検索、ヒットなければ最初の1語で再検索
+        const firstKeyword = query.trim().split(/\s+/)[0];
+        const candidateKeywords = firstKeyword !== query.trim() ? [query, firstKeyword] : [query];
 
-          const rakutenDiscoverRes = await fetch(rakutenDiscoverUrl.toString(), {
-            headers: { Referer: siteUrl, Origin: siteUrl },
-          });
-          if (rakutenDiscoverRes.ok) {
-            const rakutenDiscoverData = await rakutenDiscoverRes.json();
-            const rakutenItems: ProductResult[] = (rakutenDiscoverData.Items || [])
-              .filter((item: RakutenItem) => !isUsedItem(item.Item.itemName))
-              .map((item: RakutenItem) => ({
-                name: item.Item.itemName,
-                imageUrl: item.Item.mediumImageUrls?.[0]?.imageUrl,
-                amazonPrice: null,
-                prices: [],
-              }));
-            if (rakutenItems.length > 0) {
-              return NextResponse.json({
-                results: rakutenItems,
-                meta: {
-                  mode: "discover",
-                  rakuten: { total: rakutenDiscoverData.count ?? rakutenItems.length, shown: rakutenItems.length, hasMore: false },
-                  yahoo: { total: 0, shown: 0, hasMore: false },
-                  page: 1,
-                  hasMore: false,
-                },
-              });
+        for (const kw of candidateKeywords) {
+          try {
+            const rakutenDiscoverUrl = new URL("https://openapi.rakuten.co.jp/ichibams/api/IchibaItem/Search/20220601");
+            rakutenDiscoverUrl.searchParams.set("applicationId", rakutenAppId);
+            rakutenDiscoverUrl.searchParams.set("accessKey", rakutenAccessKey);
+            rakutenDiscoverUrl.searchParams.set("keyword", kw);
+            rakutenDiscoverUrl.searchParams.set("hits", "30");
+            rakutenDiscoverUrl.searchParams.set("page", "1");
+            rakutenDiscoverUrl.searchParams.set("format", "json");
+            rakutenDiscoverUrl.searchParams.set("sort", "+itemPrice");
+
+            const rakutenDiscoverRes = await fetch(rakutenDiscoverUrl.toString(), {
+              headers: { Referer: siteUrl, Origin: siteUrl },
+            });
+            if (rakutenDiscoverRes.ok) {
+              const rakutenDiscoverData = await rakutenDiscoverRes.json();
+              const rakutenItems: ProductResult[] = (rakutenDiscoverData.Items || [])
+                .filter((item: RakutenItem) => !isUsedItem(item.Item.itemName))
+                .map((item: RakutenItem) => ({
+                  name: item.Item.itemName,
+                  imageUrl: item.Item.mediumImageUrls?.[0]?.imageUrl,
+                  amazonPrice: null,
+                  prices: [],
+                }));
+              if (rakutenItems.length > 0) {
+                return NextResponse.json({
+                  results: rakutenItems,
+                  meta: {
+                    mode: "discover",
+                    rakuten: { total: rakutenDiscoverData.count ?? rakutenItems.length, shown: rakutenItems.length, hasMore: false },
+                    yahoo: { total: 0, shown: 0, hasMore: false },
+                    page: 1,
+                    hasMore: false,
+                  },
+                });
+              }
             }
+          } catch (e) {
+            console.error("[Rakuten/discover] error:", e);
           }
-        } catch (e) {
-          console.error("[Rakuten/discover] error:", e);
         }
       }
 
@@ -378,6 +384,57 @@ export async function GET(request: NextRequest) {
           yahoo: { total: 0, shown: 0, hasMore: false },
           page: 1,
           hasMore: false,
+        },
+      });
+    }
+
+    // ═══════════════════════════════════════════════════════════
+    // keyword モード: 商品名キーワード → 楽天+Yahoo 価格一覧
+    // JANなし商品の「価格を比較する」ボタン用
+    // ═══════════════════════════════════════════════════════════
+    if (type === "keyword") {
+      const kwAppId = process.env.RAKUTEN_APP_ID;
+      const kwAccessKey = process.env.RAKUTEN_ACCESS_KEY;
+      if (!kwAppId || !kwAccessKey) {
+        return NextResponse.json({ error: "API key not configured" }, { status: 500 });
+      }
+      const kwRakutenUrl = new URL("https://openapi.rakuten.co.jp/ichibams/api/IchibaItem/Search/20220601");
+      kwRakutenUrl.searchParams.set("applicationId", kwAppId);
+      kwRakutenUrl.searchParams.set("accessKey", kwAccessKey);
+      kwRakutenUrl.searchParams.set("keyword", query);
+      kwRakutenUrl.searchParams.set("hits", "30");
+      kwRakutenUrl.searchParams.set("page", String(page));
+      kwRakutenUrl.searchParams.set("format", "json");
+      kwRakutenUrl.searchParams.set("sort", "+itemPrice");
+
+      const [kwRakutenRes, kwYahooResults] = await Promise.all([
+        fetch(kwRakutenUrl.toString(), { headers: { Referer: siteUrl, Origin: siteUrl } }),
+        searchYahoo(query, page),
+      ]);
+
+      const kwRakutenData = kwRakutenRes.ok ? await kwRakutenRes.json() : { Items: [] };
+      const kwRakutenItems: ProductResult[] = (kwRakutenData.Items || [])
+        .filter((item: RakutenItem) => !isUsedItem(item.Item.itemName))
+        .map((item: RakutenItem) => ({
+          name: item.Item.itemName,
+          imageUrl: item.Item.mediumImageUrls?.[0]?.imageUrl,
+          amazonPrice: null,
+          prices: [{ mall: "rakuten" as const, price: item.Item.itemPrice, url: item.Item.itemUrl, availability: "available" as const }],
+        }));
+
+      const kwTotal = kwRakutenData.count ?? kwRakutenItems.length;
+      const kwPageCount = Math.ceil(kwTotal / hitsPerPage);
+      const kwYahooTotal = kwYahooResults.total;
+      const kwYahooPageCount = Math.ceil(kwYahooTotal / hitsPerPage);
+
+      return NextResponse.json({
+        results: [...kwRakutenItems, ...kwYahooResults.items],
+        meta: {
+          mode: "compare",
+          rakuten: { total: kwTotal, shown: kwRakutenItems.length, hasMore: page < kwPageCount },
+          yahoo: { total: kwYahooTotal, shown: kwYahooResults.shown, hasMore: page < kwYahooPageCount },
+          page,
+          hasMore: page < kwPageCount || page < kwYahooPageCount,
         },
       });
     }
