@@ -30,12 +30,13 @@ interface KeepaResult {
   price: number | null;
   availability: "available" | "unavailable" | "unknown";
   asin: string | null;
+  jan: string | null;
   url: string | null;
   name: string | null;
   imageUrl: string | null;
 }
 
-const KEEPA_NULL = { price: null, availability: "unknown" as const, asin: null, url: null, name: null, imageUrl: null };
+const KEEPA_NULL = { price: null, availability: "unknown" as const, asin: null, jan: null, url: null, name: null, imageUrl: null };
 
 // ─────────────────────────────────────────────────────────────────
 // Keepa 価格パース
@@ -194,12 +195,20 @@ async function searchKeepa(identifier: string, type: "jan" | "asin"): Promise<Ke
       "| csv[7]last:", (product.csv?.[7] as number[] | null)?.slice(-2),
     );
 
+    // EAN/JAN を取得 (ean 単一 または eanList 配列から)
+    const eanSingle = typeof product.ean === "string" && /^\d{8,13}$/.test(product.ean) ? product.ean : null;
+    const eanFromList = !eanSingle && Array.isArray(product.eanList)
+      ? ((product.eanList as string[]).find((e) => typeof e === "string" && /^\d{8,13}$/.test(e)) ?? null)
+      : null;
+    const jan = eanSingle ?? eanFromList;
+
     return {
       price: currentPrice,
       // ASIN が判明している場合は "unknown" にして商品ページリンクを表示する
       // "unavailable" にするとリンクが非表示になってしまうため使わない
       availability: currentPrice !== null ? "available" : "unknown",
       asin,
+      jan,
       url: `https://www.amazon.co.jp/dp/${asin}`,
       name,
       imageUrl,
@@ -448,8 +457,72 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ error: "API key not configured" }, { status: 500 });
     }
 
-    const keepaType = type === "jan" ? "jan" : type === "asin" ? "asin" : null;
+    // ─────────────────────────────────────────────────────────────
+    // ASIN比較: KeepaでJANを先取得 → JAN/商品名で楽天+Yahoo検索
+    // ─────────────────────────────────────────────────────────────
+    if (type === "asin") {
+      // Step1: Keepa からASIN情報取得（JAN含む）
+      const keepaResult = await searchKeepa(query, "asin");
 
+      // Step2: JAN判明すればJANで、なければ商品名で楽天+Yahoo検索
+      const searchKw = keepaResult.jan ?? keepaResult.name ?? query;
+      console.log("[ASIN compare] ASIN:", query, "→ searchKw:", searchKw);
+
+      const asinRakutenUrl = new URL("https://openapi.rakuten.co.jp/ichibams/api/IchibaItem/Search/20220601");
+      asinRakutenUrl.searchParams.set("applicationId", appId);
+      asinRakutenUrl.searchParams.set("accessKey", accessKey);
+      asinRakutenUrl.searchParams.set("keyword", searchKw);
+      asinRakutenUrl.searchParams.set("hits", String(hitsPerPage));
+      asinRakutenUrl.searchParams.set("page", String(page));
+      asinRakutenUrl.searchParams.set("format", "json");
+      asinRakutenUrl.searchParams.set("sort", "+itemPrice");
+
+      const [asinRakutenRes, asinYahooResults] = await Promise.all([
+        fetch(asinRakutenUrl.toString(), { headers: { Referer: siteUrl, Origin: siteUrl } }),
+        searchYahoo(searchKw, page),
+      ]);
+
+      const asinRakutenData = asinRakutenRes.ok ? await asinRakutenRes.json() : { Items: [] };
+      const asinRakutenItems: MallPrice[] = (asinRakutenData.Items || [])
+        .filter((item: RakutenItem) => !isUsedItem(item.Item.itemName))
+        .map((item: RakutenItem) => ({
+          mall: "rakuten" as const,
+          price: item.Item.itemPrice,
+          url: item.Item.itemUrl,
+          availability: "available" as const,
+        }));
+      const asinYahooItems = asinYahooResults.items.flatMap((r) => r.prices);
+
+      const amazonMallPriceAsin: MallPrice = {
+        mall: "amazon" as const,
+        price: keepaResult.price,
+        url: keepaResult.url ?? `https://www.amazon.co.jp/dp/${query}`,
+        availability: keepaResult.asin ? keepaResult.availability : "unknown",
+      };
+
+      const asinResult: ProductResult = {
+        name: keepaResult.name ?? query,
+        asin: keepaResult.asin ?? query,
+        jan: keepaResult.jan ?? undefined,
+        imageUrl: keepaResult.imageUrl ?? undefined,
+        amazonPrice: keepaResult.price,
+        prices: [amazonMallPriceAsin, ...asinRakutenItems, ...asinYahooItems],
+      };
+      return NextResponse.json({
+        results: [asinResult],
+        meta: {
+          mode: "compare",
+          rakuten: { total: asinRakutenData.count ?? asinRakutenItems.length, shown: asinRakutenItems.length, hasMore: false },
+          yahoo: { total: asinYahooResults.total, shown: asinYahooResults.shown, hasMore: false },
+          page: 1,
+          hasMore: false,
+        },
+      });
+    }
+
+    // ─────────────────────────────────────────────────────────────
+    // JAN比較: 楽天+Yahoo+Keepa を並列取得
+    // ─────────────────────────────────────────────────────────────
     const rakutenUrl = new URL("https://openapi.rakuten.co.jp/ichibams/api/IchibaItem/Search/20220601");
     rakutenUrl.searchParams.set("applicationId", appId);
     rakutenUrl.searchParams.set("accessKey", accessKey);
@@ -462,7 +535,7 @@ export async function GET(request: NextRequest) {
     const [rakutenRes, yahooResults, keepaResult] = await Promise.all([
       fetch(rakutenUrl.toString(), { headers: { Referer: siteUrl, Origin: siteUrl } }),
       searchYahoo(query, page),
-      keepaType ? searchKeepa(query, keepaType) : Promise.resolve<KeepaResult>(KEEPA_NULL),
+      searchKeepa(query, "jan"),
     ] as const);
 
     const rakutenData = await rakutenRes.json();
@@ -478,7 +551,7 @@ export async function GET(request: NextRequest) {
       .filter((item: RakutenItem) => !isUsedItem(item.Item.itemName))
       .map((item: RakutenItem) => ({
         name: item.Item.itemName,
-        jan: type === "jan" ? query : undefined,
+        jan: query,
         imageUrl: item.Item.mediumImageUrls?.[0]?.imageUrl,
         amazonPrice: null,
         prices: [
@@ -497,36 +570,36 @@ export async function GET(request: NextRequest) {
     const yahooPageCount = Math.ceil(yahooTotal / hitsPerPage);
 
     // JAN検索: Amazon + 楽天最安 + Yahoo最安 を1枚に統合
-    if (type === "jan") {
-      const bestRakuten = cheapest(rakutenResults);
-      const bestYahoo = cheapest(yahooResults.items);
+    const bestRakuten = cheapest(rakutenResults);
+    const bestYahoo = cheapest(yahooResults.items);
 
-      const amazonMallPrice: MallPrice | null = keepaResult.asin
-        ? {
-            mall: "amazon" as const,
-            price: keepaResult.price,
-            url: keepaResult.url ?? `https://www.amazon.co.jp/dp/${keepaResult.asin}`,
-            availability: keepaResult.availability,
-          }
-        : null;
+    const amazonMallPrice: MallPrice | null = keepaResult.asin
+      ? {
+          mall: "amazon" as const,
+          price: keepaResult.price,
+          url: keepaResult.url ?? `https://www.amazon.co.jp/dp/${keepaResult.asin}`,
+          availability: keepaResult.availability,
+        }
+      : null;
 
-      const prices: MallPrice[] = [
-        ...(amazonMallPrice ? [amazonMallPrice] : []),
-        ...(bestRakuten ? bestRakuten.prices : []),
-        ...(bestYahoo ? bestYahoo.prices : []),
-      ];
+    const prices: MallPrice[] = [
+      ...(amazonMallPrice ? [amazonMallPrice] : []),
+      ...(bestRakuten ? bestRakuten.prices : []),
+      ...(bestYahoo ? bestYahoo.prices : []),
+    ];
 
-      const merged: ProductResult | null = prices.length > 0
-        ? {
-            name: keepaResult.name ?? bestRakuten?.name ?? bestYahoo?.name ?? query,
-            jan: query,
-            asin: keepaResult.asin ?? undefined,
-            imageUrl: keepaResult.imageUrl ?? bestRakuten?.imageUrl ?? bestYahoo?.imageUrl,
-            amazonPrice: keepaResult.price,
-            prices,
-          }
-        : null;
+    const merged: ProductResult | null = prices.length > 0
+      ? {
+          name: keepaResult.name ?? bestRakuten?.name ?? bestYahoo?.name ?? query,
+          jan: query,
+          asin: keepaResult.asin ?? undefined,
+          imageUrl: keepaResult.imageUrl ?? bestRakuten?.imageUrl ?? bestYahoo?.imageUrl,
+          amazonPrice: keepaResult.price,
+          prices,
+        }
+      : null;
 
+    if (merged || type === "jan") {
       return NextResponse.json({
         results: merged ? [merged] : [],
         meta: {
@@ -539,34 +612,7 @@ export async function GET(request: NextRequest) {
       });
     }
 
-    // ASIN検索
-    if (type === "asin" && keepaResult.asin) {
-      const amazonMallPrice: MallPrice = {
-        mall: "amazon" as const,
-        price: keepaResult.price,
-        url: keepaResult.url ?? `https://www.amazon.co.jp/dp/${keepaResult.asin}`,
-        availability: keepaResult.availability,
-      };
-      const asinResult: ProductResult = {
-        name: keepaResult.name ?? query,
-        asin: keepaResult.asin ?? query,
-        imageUrl: keepaResult.imageUrl ?? undefined,
-        amazonPrice: keepaResult.price,
-        prices: [amazonMallPrice, ...rakutenResults.flatMap((r) => r.prices), ...yahooResults.items.flatMap((r) => r.prices)],
-      };
-      return NextResponse.json({
-        results: [asinResult],
-        meta: {
-          mode: "compare",
-          rakuten: { total: rakutenTotal, shown: rakutenResults.length, hasMore: false },
-          yahoo: { total: yahooTotal, shown: yahooResults.shown, hasMore: false },
-          page: 1,
-          hasMore: false,
-        },
-      });
-    }
-
-    // Fallback: JAN/ASIN 検索で Keepa 未設定の場合は楽天+Yahoo をそのまま返す
+    // Fallback: Keepa 未設定の場合は楽天+Yahoo をそのまま返す
     return NextResponse.json({
       results: [...rakutenResults, ...yahooResults.items],
       meta: {
