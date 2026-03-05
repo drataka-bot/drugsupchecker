@@ -1,6 +1,6 @@
 "use client";
 
-import { ProductResult, MALL_LABELS } from "@/lib/types";
+import { ProductResult, MALL_LABELS, MALL_COLORS } from "@/lib/types";
 import { ExternalLink } from "lucide-react";
 
 interface ProductPickerCardProps {
@@ -10,6 +10,10 @@ interface ProductPickerCardProps {
 
 export default function ProductPickerCard({ result, onCompare }: ProductPickerCardProps) {
   const amazonPrice = result.amazonPrice;
+  // Amazon以外の価格を安い順に並べる
+  const mallPrices = result.prices
+    .filter((p) => p.price !== null && p.availability !== "unavailable")
+    .sort((a, b) => (a.price ?? Infinity) - (b.price ?? Infinity));
 
   return (
     <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden flex flex-col">
@@ -46,9 +50,10 @@ export default function ProductPickerCard({ result, onCompare }: ProductPickerCa
             )}
           </div>
 
+          {/* Amazon参考価格 */}
           {amazonPrice !== null && (
             <div className="mt-2 flex items-center gap-1.5">
-              <span className="text-xs text-gray-400">Amazon参考価格:</span>
+              <span className="text-xs text-gray-400">Amazon:</span>
               <span className="text-sm font-bold text-orange-600">
                 ¥{amazonPrice.toLocaleString()}
               </span>
@@ -59,10 +64,36 @@ export default function ProductPickerCard({ result, onCompare }: ProductPickerCa
                   rel="noopener noreferrer"
                   className="ml-1 inline-flex items-center gap-0.5 text-xs text-blue-500 hover:text-blue-700"
                 >
-                  {MALL_LABELS.amazon}
                   <ExternalLink size={10} />
                 </a>
               )}
+            </div>
+          )}
+
+          {/* 各モール価格（安い順） */}
+          {mallPrices.length > 0 && (
+            <div className="mt-2 flex flex-col gap-1">
+              {mallPrices.map((p, i) => (
+                <div key={i} className="flex items-center gap-1.5">
+                  <span
+                    className="text-xs px-1.5 py-0.5 rounded text-white font-medium"
+                    style={{ backgroundColor: MALL_COLORS[p.mall] }}
+                  >
+                    {MALL_LABELS[p.mall]}
+                  </span>
+                  <span className="text-sm font-bold text-gray-800">
+                    ¥{p.price!.toLocaleString()}
+                  </span>
+                  <a
+                    href={p.url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-flex items-center gap-0.5 text-xs text-blue-500 hover:text-blue-700"
+                  >
+                    <ExternalLink size={10} />
+                  </a>
+                </div>
+              ))}
             </div>
           )}
         </div>

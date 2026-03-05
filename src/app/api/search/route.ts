@@ -321,8 +321,11 @@ export async function GET(request: NextRequest) {
       const yahooFallback = await searchYahoo(query, page);
       if (yahooFallback.items.length > 0) {
         const yahooPageCount = Math.ceil(yahooFallback.total / hitsPerPage);
+        const yahooSorted = [...yahooFallback.items].sort(
+          (a, b) => (a.prices[0]?.price ?? Infinity) - (b.prices[0]?.price ?? Infinity)
+        );
         return NextResponse.json({
-          results: yahooFallback.items,
+          results: yahooSorted,
           meta: {
             mode: "discover",
             rakuten: { total: 0, shown: 0, hasMore: false },
@@ -363,8 +366,14 @@ export async function GET(request: NextRequest) {
                   name: item.Item.itemName,
                   imageUrl: item.Item.mediumImageUrls?.[0]?.imageUrl,
                   amazonPrice: null,
-                  prices: [],
-                }));
+                  prices: [{
+                    mall: "rakuten" as const,
+                    price: item.Item.itemPrice,
+                    url: item.Item.itemUrl,
+                    availability: "available" as const,
+                  }],
+                }))
+                .sort((a: ProductResult, b: ProductResult) => (a.prices[0]?.price ?? Infinity) - (b.prices[0]?.price ?? Infinity));
               if (rakutenItems.length > 0) {
                 return NextResponse.json({
                   results: rakutenItems,
