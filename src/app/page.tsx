@@ -46,6 +46,7 @@ export default function Home() {
     totalHits?: number;
     totalShown?: number;
     sort?: string | null;
+    janCount?: number;
   } | null>(null);
   const [currentQuery, setCurrentQuery] = useState<SearchQuery | null>(null);
   const [isLoadingMore, setIsLoadingMore] = useState(false);
@@ -316,11 +317,18 @@ export default function Home() {
               ) : (
                 <div>
                   <div className="flex flex-wrap items-center gap-2 mb-3 text-sm text-gray-500">
-                    {searchMeta?.totalHits != null && searchMeta.totalHits > 0 && (
-                      <span>{searchMeta.totalHits.toLocaleString()}件ヒット</span>
+                    <span>
+                      <strong className="text-gray-700">{results.length}件</strong> 表示
+                      {searchMeta?.totalHits != null && searchMeta.totalHits > results.length && (
+                        <span className="text-gray-400">（全{searchMeta.totalHits.toLocaleString()}件中）</span>
+                      )}
+                    </span>
+                    {searchMeta?.janCount != null && searchMeta.janCount < results.length && (
+                      <>
+                        <span className="text-gray-300">|</span>
+                        <span className="text-xs text-green-600">JAN確定 {searchMeta.janCount}件</span>
+                      </>
                     )}
-                    <span className="text-gray-400">/</span>
-                    <span>JAN確定 <strong className="text-gray-700">{results.length}件</strong> 表示</span>
                     {searchMeta?.sort && (
                       <>
                         <span className="text-gray-300">|</span>

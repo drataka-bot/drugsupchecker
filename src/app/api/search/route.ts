@@ -303,18 +303,19 @@ export async function GET(request: NextRequest) {
     // Rakuten APIキー不要
     // ═══════════════════════════════════════════════════════════
     if (type === "name") {
-      // ─── Keepa (Amazon): JAN確定商品のみ返す ───
+      // ─── Keepa (Amazon): JAN不明でもASINがあれば比較可能 → 全件返す ───
       const { products: keepaProducts, totalFound: keepaTotal } = await searchKeepaByTermMultiple(query);
-      const keepaJan = keepaProducts.filter((p) => p.jan);
-      if (keepaJan.length > 0) {
+      if (keepaProducts.length > 0) {
+        const janCount = keepaProducts.filter((p) => p.jan).length;
         return NextResponse.json({
-          results: keepaJan,
+          results: keepaProducts,
           meta: {
             mode: "discover",
             source: "amazon",
             totalHits: keepaTotal,
-            totalShown: keepaJan.length,
+            totalShown: keepaProducts.length,
             sort: "Amazonの関連度順",
+            janCount,
             rakuten: { total: 0, shown: 0, hasMore: false },
             yahoo: { total: 0, shown: 0, hasMore: false },
             page: 1,
@@ -323,7 +324,7 @@ export async function GET(request: NextRequest) {
         });
       }
 
-      // ─── Keepa未設定 or JAN付き結果なし → Yahoo (JAN確定のみ) ───
+      // ─── Keepa未設定 or 結果なし → Yahoo (JAN確定のみ) ───
       const yahooFallback = await searchYahoo(query, page);
       const yahooJan = yahooFallback.items.filter((p) => p.jan);
       if (yahooJan.length > 0) {
@@ -339,6 +340,7 @@ export async function GET(request: NextRequest) {
             totalHits: yahooFallback.total,
             totalShown: yahooSorted.length,
             sort: "価格の安い順",
+            janCount: yahooSorted.length,
             rakuten: { total: 0, shown: 0, hasMore: false },
             yahoo: { total: yahooFallback.total, shown: yahooSorted.length, hasMore: page < yahooPageCount },
             page,
@@ -347,7 +349,7 @@ export async function GET(request: NextRequest) {
         });
       }
 
-      // ─── 全API結果なし (楽天はJANなしのためスキップ) ───
+      // ─── 全API結果なし ───
       return NextResponse.json({
         results: [],
         meta: {
@@ -356,6 +358,7 @@ export async function GET(request: NextRequest) {
           totalHits: keepaTotal + yahooFallback.total,
           totalShown: 0,
           sort: null,
+          janCount: 0,
           rakuten: { total: 0, shown: 0, hasMore: false },
           yahoo: { total: 0, shown: 0, hasMore: false },
           page: 1,
