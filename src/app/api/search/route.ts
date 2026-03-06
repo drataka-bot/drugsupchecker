@@ -488,15 +488,74 @@ export async function GET(request: NextRequest) {
         });
       }
 
-      // JAN不明 → キーワードのフラット結果
+      // JAN不明 → Yahoo結果からJAN取得を試みる
+      const janFromYahoo = kwYahooResults.items.find((i) => i.jan)?.jan ?? null;
+      if (janFromYahoo) {
+        // YahooからJAN取得成功 → JANで楽天+Yahoo+Keepa再検索
+        const jan2RakutenUrl = new URL("https://openapi.rakuten.co.jp/ichibams/api/IchibaItem/Search/20220601");
+        jan2RakutenUrl.searchParams.set("applicationId", kwAppId);
+        jan2RakutenUrl.searchParams.set("accessKey", kwAccessKey);
+        jan2RakutenUrl.searchParams.set("keyword", janFromYahoo);
+        jan2RakutenUrl.searchParams.set("hits", "30");
+        jan2RakutenUrl.searchParams.set("page", "1");
+        jan2RakutenUrl.searchParams.set("format", "json");
+        jan2RakutenUrl.searchParams.set("sort", "+itemPrice");
+
+        const [jan2RkRes, jan2YhResults, jan2KeepaResult] = await Promise.all([
+          fetch(jan2RakutenUrl.toString(), { headers: { Referer: siteUrl, Origin: siteUrl } }),
+          searchYahoo(janFromYahoo, 1),
+          searchKeepa(janFromYahoo, "jan"),
+        ]);
+
+        const jan2RkData = jan2RkRes.ok ? await jan2RkRes.json() : { Items: [] };
+        const jan2RkItems: ProductResult[] = (jan2RkData.Items || [])
+          .filter((item: RakutenItem) => !isUsedItem(item.Item.itemName))
+          .map((item: RakutenItem) => ({
+            name: item.Item.itemName,
+            jan: janFromYahoo,
+            imageUrl: item.Item.mediumImageUrls?.[0]?.imageUrl,
+            amazonPrice: null,
+            prices: [{ mall: "rakuten" as const, price: item.Item.itemPrice, url: item.Item.itemUrl, availability: "available" as const }],
+          }));
+        const bestJan2Rk = cheapest(jan2RkItems);
+        const bestJan2Yh = cheapest(jan2YhResults.items);
+        const jan2Amazon: MallPrice | null = jan2KeepaResult.asin
+          ? { mall: "amazon" as const, price: jan2KeepaResult.price, url: jan2KeepaResult.url ?? `https://www.amazon.co.jp/dp/${jan2KeepaResult.asin}`, availability: jan2KeepaResult.availability }
+          : null;
+        const jan2Prices: MallPrice[] = [
+          ...(jan2Amazon ? [jan2Amazon] : []),
+          ...(bestJan2Rk ? bestJan2Rk.prices : []),
+          ...(bestJan2Yh ? bestJan2Yh.prices : []),
+        ];
+        const jan2Merged: ProductResult = {
+          name: jan2KeepaResult.name ?? bestJan2Rk?.name ?? bestJan2Yh?.name ?? query,
+          jan: janFromYahoo,
+          asin: jan2KeepaResult.asin ?? undefined,
+          imageUrl: jan2KeepaResult.imageUrl ?? bestJan2Rk?.imageUrl ?? bestJan2Yh?.imageUrl,
+          amazonPrice: jan2KeepaResult.price,
+          prices: jan2Prices,
+        };
+        return NextResponse.json({
+          results: jan2Prices.length > 0 ? [jan2Merged] : [],
+          meta: {
+            mode: "compare",
+            rakuten: { total: jan2RkData.count ?? jan2RkItems.length, shown: jan2RkItems.length, hasMore: false },
+            yahoo: { total: jan2YhResults.total, shown: jan2YhResults.shown, hasMore: false },
+            page: 1,
+            hasMore: false,
+          },
+        });
+      }
+
+      // JAN完全不明 → 結果なし（商品名検索はしない）
       return NextResponse.json({
-        results: [...kwRakutenItems, ...kwYahooResults.items],
+        results: [],
         meta: {
           mode: "compare",
-          rakuten: { total: kwTotal, shown: kwRakutenItems.length, hasMore: page < kwPageCount },
-          yahoo: { total: kwYahooTotal, shown: kwYahooResults.shown, hasMore: page < kwYahooPageCount },
-          page,
-          hasMore: page < kwPageCount || page < kwYahooPageCount,
+          rakuten: { total: 0, shown: 0, hasMore: false },
+          yahoo: { total: 0, shown: 0, hasMore: false },
+          page: 1,
+          hasMore: false,
         },
       });
     }
@@ -511,40 +570,21 @@ export async function GET(request: NextRequest) {
     }
 
     // ─────────────────────────────────────────────────────────────
-    // ASIN比較: KeepaでJANを先取得 → JAN/商品名で楽天+Yahoo検索
+    // ASIN比較: Keepa→JAN取得→(なければYahoo)→JANで楽天+Yahoo検索
+    // 商品名検索には絶対フォールバックしない
     // ─────────────────────────────────────────────────────────────
     if (type === "asin") {
-      // Step1: Keepa からASIN情報取得（JAN含む）
+      // Step1: KeepaからASIN情報取得（JAN含む）
       const keepaResult = await searchKeepa(query, "asin");
 
-      // Step2: JAN判明すればJANで、なければ商品名で楽天+Yahoo検索
-      const searchKw = keepaResult.jan ?? keepaResult.name ?? query;
-      console.log("[ASIN compare] ASIN:", query, "→ searchKw:", searchKw);
-
-      const asinRakutenUrl = new URL("https://openapi.rakuten.co.jp/ichibams/api/IchibaItem/Search/20220601");
-      asinRakutenUrl.searchParams.set("applicationId", appId);
-      asinRakutenUrl.searchParams.set("accessKey", accessKey);
-      asinRakutenUrl.searchParams.set("keyword", searchKw);
-      asinRakutenUrl.searchParams.set("hits", String(hitsPerPage));
-      asinRakutenUrl.searchParams.set("page", String(page));
-      asinRakutenUrl.searchParams.set("format", "json");
-      asinRakutenUrl.searchParams.set("sort", "+itemPrice");
-
-      const [asinRakutenRes, asinYahooResults] = await Promise.all([
-        fetch(asinRakutenUrl.toString(), { headers: { Referer: siteUrl, Origin: siteUrl } }),
-        searchYahoo(searchKw, page),
-      ]);
-
-      const asinRakutenData = asinRakutenRes.ok ? await asinRakutenRes.json() : { Items: [] };
-      const asinRakutenItems: MallPrice[] = (asinRakutenData.Items || [])
-        .filter((item: RakutenItem) => !isUsedItem(item.Item.itemName))
-        .map((item: RakutenItem) => ({
-          mall: "rakuten" as const,
-          price: item.Item.itemPrice,
-          url: item.Item.itemUrl,
-          availability: "available" as const,
-        }));
-      const asinYahooItems = asinYahooResults.items.flatMap((r) => r.prices);
+      // Step2: KeepaにJANがなければ商品名でYahoo検索してJAN取得
+      let resolvedJan = keepaResult.jan;
+      if (!resolvedJan && keepaResult.name) {
+        const yahooForJan = await searchYahoo(keepaResult.name, 1);
+        resolvedJan = yahooForJan.items.find((i) => i.jan)?.jan ?? null;
+        console.log("[ASIN compare] JAN from Yahoo:", resolvedJan);
+      }
+      console.log("[ASIN compare] ASIN:", query, "→ JAN:", resolvedJan);
 
       const amazonMallPriceAsin: MallPrice = {
         mall: "amazon" as const,
@@ -553,20 +593,74 @@ export async function GET(request: NextRequest) {
         availability: keepaResult.asin ? keepaResult.availability : "unknown",
       };
 
-      const asinResult: ProductResult = {
+      if (resolvedJan) {
+        // Step3: JAN確定 → JANで楽天+Yahoo並列検索
+        const janRakutenUrl = new URL("https://openapi.rakuten.co.jp/ichibams/api/IchibaItem/Search/20220601");
+        janRakutenUrl.searchParams.set("applicationId", appId);
+        janRakutenUrl.searchParams.set("accessKey", accessKey);
+        janRakutenUrl.searchParams.set("keyword", resolvedJan);
+        janRakutenUrl.searchParams.set("hits", String(hitsPerPage));
+        janRakutenUrl.searchParams.set("page", String(page));
+        janRakutenUrl.searchParams.set("format", "json");
+        janRakutenUrl.searchParams.set("sort", "+itemPrice");
+
+        const [janRkRes, janYhResults] = await Promise.all([
+          fetch(janRakutenUrl.toString(), { headers: { Referer: siteUrl, Origin: siteUrl } }),
+          searchYahoo(resolvedJan, page),
+        ]);
+
+        const janRkData = janRkRes.ok ? await janRkRes.json() : { Items: [] };
+        const janRkItems: ProductResult[] = (janRkData.Items || [])
+          .filter((item: RakutenItem) => !isUsedItem(item.Item.itemName))
+          .map((item: RakutenItem) => ({
+            name: item.Item.itemName,
+            jan: resolvedJan ?? undefined,
+            imageUrl: item.Item.mediumImageUrls?.[0]?.imageUrl,
+            amazonPrice: null,
+            prices: [{ mall: "rakuten" as const, price: item.Item.itemPrice, url: item.Item.itemUrl, availability: "available" as const }],
+          }));
+
+        const bestJanRk = cheapest(janRkItems);
+        const bestJanYh = cheapest(janYhResults.items);
+
+        const asinResult: ProductResult = {
+          name: keepaResult.name ?? query,
+          asin: keepaResult.asin ?? query,
+          jan: resolvedJan,
+          imageUrl: keepaResult.imageUrl ?? bestJanRk?.imageUrl ?? bestJanYh?.imageUrl,
+          amazonPrice: keepaResult.price,
+          prices: [
+            amazonMallPriceAsin,
+            ...(bestJanRk ? bestJanRk.prices : []),
+            ...(bestJanYh ? bestJanYh.prices : []),
+          ],
+        };
+        return NextResponse.json({
+          results: [asinResult],
+          meta: {
+            mode: "compare",
+            rakuten: { total: janRkData.count ?? janRkItems.length, shown: janRkItems.length, hasMore: false },
+            yahoo: { total: janYhResults.total, shown: janYhResults.shown, hasMore: false },
+            page: 1,
+            hasMore: false,
+          },
+        });
+      }
+
+      // JAN完全不明 → Amazon価格のみ表示
+      const asinOnlyResult: ProductResult = {
         name: keepaResult.name ?? query,
         asin: keepaResult.asin ?? query,
-        jan: keepaResult.jan ?? undefined,
         imageUrl: keepaResult.imageUrl ?? undefined,
         amazonPrice: keepaResult.price,
-        prices: [amazonMallPriceAsin, ...asinRakutenItems, ...asinYahooItems],
+        prices: [amazonMallPriceAsin],
       };
       return NextResponse.json({
-        results: [asinResult],
+        results: [asinOnlyResult],
         meta: {
           mode: "compare",
-          rakuten: { total: asinRakutenData.count ?? asinRakutenItems.length, shown: asinRakutenItems.length, hasMore: false },
-          yahoo: { total: asinYahooResults.total, shown: asinYahooResults.shown, hasMore: false },
+          rakuten: { total: 0, shown: 0, hasMore: false },
+          yahoo: { total: 0, shown: 0, hasMore: false },
           page: 1,
           hasMore: false,
         },
