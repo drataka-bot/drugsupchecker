@@ -407,7 +407,7 @@ export async function GET(request: NextRequest) {
     }
 
     // ═══════════════════════════════════════════════════════════
-    // keyword モード: 商品名キーワード → 楽天+Yahoo 価格一覧
+    // keyword モード: 商品名キーワード → JAN取得試行 → JAN/楽天+Yahoo
     // JANなし商品の「価格を比較する」ボタン用
     // ═══════════════════════════════════════════════════════════
     if (type === "keyword") {
@@ -416,18 +416,28 @@ export async function GET(request: NextRequest) {
       if (!kwAppId || !kwAccessKey) {
         return NextResponse.json({ error: "API key not configured" }, { status: 500 });
       }
+
+      // KeepaでJANを取得できるか試みる（取得できればJAN比較に昇格）
+      const keepaTry = await searchKeepaByTermMultiple(query);
+      const janCandidate = keepaTry.find((p) => p.jan)?.jan ?? null;
+
+      // JANが取得できればJANで、なければ元のキーワードで検索
+      const searchKw = janCandidate ?? query;
+      console.log("[keyword compare] query:", query, "→ searchKw:", searchKw, "(JAN:", janCandidate, ")");
+
       const kwRakutenUrl = new URL("https://openapi.rakuten.co.jp/ichibams/api/IchibaItem/Search/20220601");
       kwRakutenUrl.searchParams.set("applicationId", kwAppId);
       kwRakutenUrl.searchParams.set("accessKey", kwAccessKey);
-      kwRakutenUrl.searchParams.set("keyword", query);
+      kwRakutenUrl.searchParams.set("keyword", searchKw);
       kwRakutenUrl.searchParams.set("hits", "30");
       kwRakutenUrl.searchParams.set("page", String(page));
       kwRakutenUrl.searchParams.set("format", "json");
       kwRakutenUrl.searchParams.set("sort", "+itemPrice");
 
-      const [kwRakutenRes, kwYahooResults] = await Promise.all([
+      const [kwRakutenRes, kwYahooResults, kwKeepaResult] = await Promise.all([
         fetch(kwRakutenUrl.toString(), { headers: { Referer: siteUrl, Origin: siteUrl } }),
-        searchYahoo(query, page),
+        searchYahoo(searchKw, page),
+        janCandidate ? searchKeepa(janCandidate, "jan") : Promise.resolve<KeepaResult>(KEEPA_NULL),
       ]);
 
       const kwRakutenData = kwRakutenRes.ok ? await kwRakutenRes.json() : { Items: [] };
@@ -435,6 +445,7 @@ export async function GET(request: NextRequest) {
         .filter((item: RakutenItem) => !isUsedItem(item.Item.itemName))
         .map((item: RakutenItem) => ({
           name: item.Item.itemName,
+          jan: janCandidate ?? undefined,
           imageUrl: item.Item.mediumImageUrls?.[0]?.imageUrl,
           amazonPrice: null,
           prices: [{ mall: "rakuten" as const, price: item.Item.itemPrice, url: item.Item.itemUrl, availability: "available" as const }],
@@ -445,6 +456,39 @@ export async function GET(request: NextRequest) {
       const kwYahooTotal = kwYahooResults.total;
       const kwYahooPageCount = Math.ceil(kwYahooTotal / hitsPerPage);
 
+      if (janCandidate) {
+        // JAN判明 → 1枚の価格比較カードに統合
+        const kwBestRakuten = cheapest(kwRakutenItems);
+        const kwBestYahoo = cheapest(kwYahooResults.items);
+        const kwAmazonPrice: MallPrice | null = kwKeepaResult.asin
+          ? { mall: "amazon" as const, price: kwKeepaResult.price, url: kwKeepaResult.url ?? `https://www.amazon.co.jp/dp/${kwKeepaResult.asin}`, availability: kwKeepaResult.availability }
+          : null;
+        const kwPrices: MallPrice[] = [
+          ...(kwAmazonPrice ? [kwAmazonPrice] : []),
+          ...(kwBestRakuten ? kwBestRakuten.prices : []),
+          ...(kwBestYahoo ? kwBestYahoo.prices : []),
+        ];
+        const kwMerged: ProductResult = {
+          name: kwKeepaResult.name ?? kwBestRakuten?.name ?? kwBestYahoo?.name ?? query,
+          jan: janCandidate,
+          asin: kwKeepaResult.asin ?? undefined,
+          imageUrl: kwKeepaResult.imageUrl ?? kwBestRakuten?.imageUrl ?? kwBestYahoo?.imageUrl,
+          amazonPrice: kwKeepaResult.price,
+          prices: kwPrices,
+        };
+        return NextResponse.json({
+          results: kwPrices.length > 0 ? [kwMerged] : [],
+          meta: {
+            mode: "compare",
+            rakuten: { total: kwTotal, shown: kwRakutenItems.length, hasMore: false },
+            yahoo: { total: kwYahooTotal, shown: kwYahooResults.shown, hasMore: false },
+            page: 1,
+            hasMore: false,
+          },
+        });
+      }
+
+      // JAN不明 → キーワードのフラット結果
       return NextResponse.json({
         results: [...kwRakutenItems, ...kwYahooResults.items],
         meta: {
