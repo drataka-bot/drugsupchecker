@@ -79,9 +79,9 @@ function isUsedItem(name: string): boolean {
 // 2ステップ: /search(keyword→ASINs) → /product(ASINs→詳細)
 // ─────────────────────────────────────────────────────────────────
 
-async function searchKeepaByTermMultiple(term: string): Promise<ProductResult[]> {
+async function searchKeepaByTermMultiple(term: string): Promise<{ products: ProductResult[]; totalFound: number }> {
   const apiKey = process.env.KEEPA_API_KEY;
-  if (!apiKey) return [];
+  if (!apiKey) return { products: [], totalFound: 0 };
 
   try {
     const searchUrl = new URL("https://api.keepa.com/search");
@@ -93,13 +93,13 @@ async function searchKeepaByTermMultiple(term: string): Promise<ProductResult[]>
     const searchRes = await fetch(searchUrl.toString());
     if (!searchRes.ok) {
       console.error("[Keepa/search] error:", searchRes.status);
-      return [];
+      return { products: [], totalFound: 0 };
     }
     const searchData = await searchRes.json();
     const asinList: string[] = searchData.searchResult?.asinList ?? [];
-    if (asinList.length === 0) return [];
+    if (asinList.length === 0) return { products: [], totalFound: 0 };
 
-    const topAsins = asinList.slice(0, 10).join(",");
+    const topAsins = asinList.slice(0, 20).join(",");
 
     const prodUrl = new URL("https://api.keepa.com/product");
     prodUrl.searchParams.set("key", apiKey);
@@ -110,15 +110,15 @@ async function searchKeepaByTermMultiple(term: string): Promise<ProductResult[]>
     const prodRes = await fetch(prodUrl.toString());
     if (!prodRes.ok) {
       console.error("[Keepa/product] error:", prodRes.status);
-      return [];
+      return { products: [], totalFound: asinList.length };
     }
     const prodData = await prodRes.json();
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const products: any[] = prodData.products ?? [];
 
-    console.log("[Keepa/search]", `"${term}"`, "→", products.length, "products");
+    console.log("[Keepa/search]", `"${term}"`, "→", products.length, "products (total:", asinList.length, ")");
 
-    return products.map((p) => {
+    const mapped = products.map((p) => {
       const eanSingle = typeof p.ean === "string" && /^\d{8,13}$/.test(p.ean) ? p.ean : undefined;
       const eanFromList = !eanSingle && Array.isArray(p.eanList)
         ? (p.eanList as string[]).find((e) => typeof e === "string" && /^\d{8,13}$/.test(e))
@@ -134,9 +134,10 @@ async function searchKeepaByTermMultiple(term: string): Promise<ProductResult[]>
         prices: [],
       };
     });
+    return { products: mapped, totalFound: asinList.length };
   } catch (e) {
     console.error("[Keepa/search/multi] error:", e);
-    return [];
+    return { products: [], totalFound: 0 };
   }
 }
 
@@ -302,13 +303,18 @@ export async function GET(request: NextRequest) {
     // Rakuten APIキー不要
     // ═══════════════════════════════════════════════════════════
     if (type === "name") {
-      // Keepaで商品リスト取得 (ASIN+EAN+Amazon参考価格)
-      const keepaProducts = await searchKeepaByTermMultiple(query);
-      if (keepaProducts.length > 0) {
+      // ─── Keepa (Amazon): JAN確定商品のみ返す ───
+      const { products: keepaProducts, totalFound: keepaTotal } = await searchKeepaByTermMultiple(query);
+      const keepaJan = keepaProducts.filter((p) => p.jan);
+      if (keepaJan.length > 0) {
         return NextResponse.json({
-          results: keepaProducts,
+          results: keepaJan,
           meta: {
             mode: "discover",
+            source: "amazon",
+            totalHits: keepaTotal,
+            totalShown: keepaJan.length,
+            sort: "Amazonの関連度順",
             rakuten: { total: 0, shown: 0, hasMore: false },
             yahoo: { total: 0, shown: 0, hasMore: false },
             page: 1,
@@ -317,87 +323,39 @@ export async function GET(request: NextRequest) {
         });
       }
 
-      // Keepa未設定 or 結果なし → Yahoo検索フォールバック
+      // ─── Keepa未設定 or JAN付き結果なし → Yahoo (JAN確定のみ) ───
       const yahooFallback = await searchYahoo(query, page);
-      if (yahooFallback.items.length > 0) {
+      const yahooJan = yahooFallback.items.filter((p) => p.jan);
+      if (yahooJan.length > 0) {
         const yahooPageCount = Math.ceil(yahooFallback.total / hitsPerPage);
-        const yahooSorted = [...yahooFallback.items].sort(
+        const yahooSorted = [...yahooJan].sort(
           (a, b) => (a.prices[0]?.price ?? Infinity) - (b.prices[0]?.price ?? Infinity)
         );
         return NextResponse.json({
           results: yahooSorted,
           meta: {
             mode: "discover",
+            source: "yahoo",
+            totalHits: yahooFallback.total,
+            totalShown: yahooSorted.length,
+            sort: "価格の安い順",
             rakuten: { total: 0, shown: 0, hasMore: false },
-            yahoo: { total: yahooFallback.total, shown: yahooFallback.shown, hasMore: page < yahooPageCount },
+            yahoo: { total: yahooFallback.total, shown: yahooSorted.length, hasMore: page < yahooPageCount },
             page,
             hasMore: page < yahooPageCount,
           },
         });
       }
 
-      // Yahoo未設定 or 結果なし → Rakuten検索フォールバック
-      const rakutenAppId = process.env.RAKUTEN_APP_ID;
-      const rakutenAccessKey = process.env.RAKUTEN_ACCESS_KEY;
-      if (rakutenAppId && rakutenAccessKey) {
-        // 部分一致: まず完全クエリで検索、ヒットなければ最初の1語で再検索
-        const firstKeyword = query.trim().split(/\s+/)[0];
-        const candidateKeywords = firstKeyword !== query.trim() ? [query, firstKeyword] : [query];
-
-        for (const kw of candidateKeywords) {
-          try {
-            const rakutenDiscoverUrl = new URL("https://openapi.rakuten.co.jp/ichibams/api/IchibaItem/Search/20220601");
-            rakutenDiscoverUrl.searchParams.set("applicationId", rakutenAppId);
-            rakutenDiscoverUrl.searchParams.set("accessKey", rakutenAccessKey);
-            rakutenDiscoverUrl.searchParams.set("keyword", kw);
-            rakutenDiscoverUrl.searchParams.set("hits", "30");
-            rakutenDiscoverUrl.searchParams.set("page", "1");
-            rakutenDiscoverUrl.searchParams.set("format", "json");
-            rakutenDiscoverUrl.searchParams.set("sort", "+itemPrice");
-
-            const rakutenDiscoverRes = await fetch(rakutenDiscoverUrl.toString(), {
-              headers: { Referer: siteUrl, Origin: siteUrl },
-            });
-            if (rakutenDiscoverRes.ok) {
-              const rakutenDiscoverData = await rakutenDiscoverRes.json();
-              const rakutenItems: ProductResult[] = (rakutenDiscoverData.Items || [])
-                .filter((item: RakutenItem) => !isUsedItem(item.Item.itemName))
-                .map((item: RakutenItem) => ({
-                  name: item.Item.itemName,
-                  imageUrl: item.Item.mediumImageUrls?.[0]?.imageUrl,
-                  amazonPrice: null,
-                  prices: [{
-                    mall: "rakuten" as const,
-                    price: item.Item.itemPrice,
-                    url: item.Item.itemUrl,
-                    availability: "available" as const,
-                  }],
-                }))
-                .sort((a: ProductResult, b: ProductResult) => (a.prices[0]?.price ?? Infinity) - (b.prices[0]?.price ?? Infinity));
-              if (rakutenItems.length > 0) {
-                return NextResponse.json({
-                  results: rakutenItems,
-                  meta: {
-                    mode: "discover",
-                    rakuten: { total: rakutenDiscoverData.count ?? rakutenItems.length, shown: rakutenItems.length, hasMore: false },
-                    yahoo: { total: 0, shown: 0, hasMore: false },
-                    page: 1,
-                    hasMore: false,
-                  },
-                });
-              }
-            }
-          } catch (e) {
-            console.error("[Rakuten/discover] error:", e);
-          }
-        }
-      }
-
-      // 全API結果なし
+      // ─── 全API結果なし (楽天はJANなしのためスキップ) ───
       return NextResponse.json({
         results: [],
         meta: {
           mode: "discover",
+          source: "none",
+          totalHits: keepaTotal + yahooFallback.total,
+          totalShown: 0,
+          sort: null,
           rakuten: { total: 0, shown: 0, hasMore: false },
           yahoo: { total: 0, shown: 0, hasMore: false },
           page: 1,
@@ -417,7 +375,7 @@ export async function GET(request: NextRequest) {
       }
 
       // Step1: KeepaでJAN取得を試みる
-      const keepaTry = await searchKeepaByTermMultiple(query);
+      const { products: keepaTry } = await searchKeepaByTermMultiple(query);
       let resolvedJan = keepaTry.find((p) => p.jan)?.jan ?? null;
       console.log("[keyword] Keepa JAN:", resolvedJan);
 

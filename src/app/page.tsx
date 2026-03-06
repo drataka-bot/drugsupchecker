@@ -42,6 +42,10 @@ export default function Home() {
     yahoo: { total: number; shown: number; hasMore: boolean };
     page: number;
     hasMore: boolean;
+    source?: string;
+    totalHits?: number;
+    totalShown?: number;
+    sort?: string | null;
   } | null>(null);
   const [currentQuery, setCurrentQuery] = useState<SearchQuery | null>(null);
   const [isLoadingMore, setIsLoadingMore] = useState(false);
@@ -311,7 +315,19 @@ export default function Home() {
                 </div>
               ) : (
                 <div>
-                  <p className="text-sm text-gray-500 mb-3">{results.length}件の商品が見つかりました</p>
+                  <div className="flex flex-wrap items-center gap-2 mb-3 text-sm text-gray-500">
+                    {searchMeta?.totalHits != null && searchMeta.totalHits > 0 && (
+                      <span>{searchMeta.totalHits.toLocaleString()}件ヒット</span>
+                    )}
+                    <span className="text-gray-400">/</span>
+                    <span>JAN確定 <strong className="text-gray-700">{results.length}件</strong> 表示</span>
+                    {searchMeta?.sort && (
+                      <>
+                        <span className="text-gray-300">|</span>
+                        <span className="text-xs bg-gray-100 px-2 py-0.5 rounded">{searchMeta.sort}</span>
+                      </>
+                    )}
+                  </div>
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                     {results.map((result, i) => (
                       <ProductPickerCard
@@ -347,7 +363,11 @@ export default function Home() {
               ) : (
                 <div className="flex flex-col gap-4">
                   {displayResults.length > 0 && (
-                    <p className="text-sm text-gray-500">{displayResults.length}件</p>
+                    <div className="flex flex-wrap items-center gap-2 text-sm text-gray-500">
+                      <span><strong className="text-gray-700">{displayResults.length}件</strong> の比較結果</span>
+                      {(searchMeta?.rakuten.total ?? 0) > 0 && <span className="text-xs text-gray-400">楽天 {searchMeta!.rakuten.total}件</span>}
+                      {(searchMeta?.yahoo.total ?? 0) > 0 && <span className="text-xs text-gray-400">Yahoo {searchMeta!.yahoo.total}件</span>}
+                    </div>
                   )}
                   {displayResults.map((result, i) => (
                     <PriceTable
