@@ -225,7 +225,99 @@ async function searchKeepa(identifier: string, type: "jan" | "asin"): Promise<Ke
 }
 
 // ─────────────────────────────────────────────────────────────────
-// Yahoo! ショッピング
+// Yahoo! ショッピング (ページスクレイプ fallback: APIキー不要)
+// ─────────────────────────────────────────────────────────────────
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function findHitsArray(obj: any, depth = 0): any[] {
+  if (depth > 8 || !obj || typeof obj !== "object") return [];
+  if (Array.isArray(obj) && obj.length > 0 && typeof obj[0]?.name === "string") return obj;
+  for (const key of ["hits", "items", "products", "result", "searchResult"]) {
+    if (Array.isArray(obj[key]) && obj[key].length > 0) return obj[key];
+  }
+  for (const val of Object.values(obj)) {
+    const found = findHitsArray(val, depth + 1);
+    if (found.length > 0) return found;
+  }
+  return [];
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function parseScrapedHit(h: any): ProductResult | null {
+  const name = h?.name || h?.title;
+  const price = h?.price || h?.priceMin || h?.lowestPrice;
+  const url = h?.url || h?.externalUrl || h?.itemUrl;
+  if (!name || !price || !url) return null;
+  return {
+    name: String(name),
+    jan: h?.janCode || h?.jan_code || h?.jan || undefined,
+    imageUrl: h?.image?.medium || h?.image?.small || h?.imageUrl || h?.thumbnailUrl || undefined,
+    amazonPrice: null,
+    prices: [{ mall: "yahoo" as const, price: Number(price), url: String(url), availability: "available" as const }],
+  };
+}
+
+async function scrapeYahooShopping(query: string): Promise<ProductResult[]> {
+  try {
+    const url = `https://shopping.yahoo.co.jp/search?p=${encodeURIComponent(query)}&X=0`;
+    const ctrl = new AbortController();
+    const t = setTimeout(() => ctrl.abort(), 8000);
+    const res = await fetch(url, {
+      signal: ctrl.signal,
+      headers: {
+        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
+        "Accept": "text/html,application/xhtml+xml",
+        "Accept-Language": "ja-JP,ja;q=0.9,en;q=0.8",
+      },
+    });
+    clearTimeout(t);
+    if (!res.ok) return [];
+
+    const html = await res.text();
+
+    // __NEXT_DATA__ から商品配列を探す
+    const m = html.match(/<script id="__NEXT_DATA__"[^>]*>([\s\S]*?)<\/script>/);
+    if (m) {
+      const hits = findHitsArray(JSON.parse(m[1]));
+      const products = hits.slice(0, 20).map(parseScrapedHit).filter(Boolean) as ProductResult[];
+      if (products.length > 0) return products;
+    }
+
+    // JSON-LD structured data
+    const ldMatches = [...html.matchAll(/<script type="application\/ld\+json">([\s\S]*?)<\/script>/g)];
+    for (const ldm of ldMatches) {
+      try {
+        const ld = JSON.parse(ldm[1]);
+        const list = ld?.itemListElement ?? ld?.offers ?? [];
+        if (Array.isArray(list) && list.length > 0) {
+          const products = list.slice(0, 20).map((item: Record<string, unknown>) => {
+            const listing = (item.item ?? item) as Record<string, unknown>;
+            const offer = (listing.offers ?? listing) as Record<string, unknown>;
+            const name = listing.name ?? item.name;
+            const price = offer.price ?? (offer.lowPrice);
+            const url = listing.url ?? item.url;
+            if (!name || !price || !url) return null;
+            return {
+              name: String(name),
+              imageUrl: String(listing.image ?? ""),
+              amazonPrice: null,
+              prices: [{ mall: "yahoo" as const, price: Number(price), url: String(url), availability: "available" as const }],
+            } as ProductResult;
+          }).filter(Boolean) as ProductResult[];
+          if (products.length > 0) return products;
+        }
+      } catch { /* skip */ }
+    }
+
+    return [];
+  } catch (e) {
+    console.error("[Yahoo Scrape] error:", e);
+    return [];
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────
+// Yahoo! ショッピング (API)
 // ─────────────────────────────────────────────────────────────────
 
 async function searchYahoo(query: string, page: number, inStock = true): Promise<YahooResult> {
@@ -353,13 +445,33 @@ export async function GET(request: NextRequest) {
         });
       }
 
-      // ─── 全API結果なし ───
+      // ─── APIキー未設定 → Yahoo Shopping ページスクレイプ (APIキー不要) ───
+      const scraped = await scrapeYahooShopping(query);
+      if (scraped.length > 0) {
+        return NextResponse.json({
+          results: scraped,
+          meta: {
+            mode: "discover",
+            source: "yahoo_scrape",
+            totalHits: scraped.length,
+            totalShown: scraped.length,
+            sort: null,
+            janCount: scraped.filter((p) => p.jan).length,
+            rakuten: { total: 0, shown: 0, hasMore: false },
+            yahoo: { total: scraped.length, shown: scraped.length, hasMore: false },
+            page: 1,
+            hasMore: false,
+          },
+        });
+      }
+
+      // ─── 全結果なし ───
       return NextResponse.json({
         results: [],
         meta: {
           mode: "discover",
           source: "none",
-          totalHits: keepaTotal + yahooFallback.total,
+          totalHits: 0,
           totalShown: 0,
           sort: null,
           janCount: 0,
