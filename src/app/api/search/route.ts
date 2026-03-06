@@ -79,9 +79,13 @@ function isUsedItem(name: string): boolean {
 // 2ステップ: /search(keyword→ASINs) → /product(ASINs→詳細)
 // ─────────────────────────────────────────────────────────────────
 
+function isValidKey(key: string | undefined): key is string {
+  return !!key && /^[A-Za-z0-9_\-]+$/.test(key);
+}
+
 async function searchKeepaByTermMultiple(term: string): Promise<{ products: ProductResult[]; totalFound: number }> {
   const apiKey = process.env.KEEPA_API_KEY;
-  if (!apiKey) return { products: [], totalFound: 0 };
+  if (!isValidKey(apiKey)) return { products: [], totalFound: 0 };
 
   try {
     const searchUrl = new URL("https://api.keepa.com/search");
@@ -147,7 +151,7 @@ async function searchKeepaByTermMultiple(term: string): Promise<{ products: Prod
 
 async function searchKeepa(identifier: string, type: "jan" | "asin"): Promise<KeepaResult> {
   const apiKey = process.env.KEEPA_API_KEY;
-  if (!apiKey) return KEEPA_NULL;
+  if (!isValidKey(apiKey)) return KEEPA_NULL;
 
   try {
     const url = new URL("https://api.keepa.com/product");
@@ -226,7 +230,7 @@ async function searchKeepa(identifier: string, type: "jan" | "asin"): Promise<Ke
 
 async function searchYahoo(query: string, page: number, inStock = true): Promise<YahooResult> {
   const appId = process.env.YAHOO_APP_ID;
-  if (!appId) return { items: [], total: 0, shown: 0 };
+  if (!isValidKey(appId)) return { items: [], total: 0, shown: 0 };
 
   const hitsPerPage = 30;
   const start = (page - 1) * hitsPerPage + 1;
