@@ -224,7 +224,7 @@ async function searchKeepa(identifier: string, type: "jan" | "asin"): Promise<Ke
 // Yahoo! ショッピング
 // ─────────────────────────────────────────────────────────────────
 
-async function searchYahoo(query: string, page: number): Promise<YahooResult> {
+async function searchYahoo(query: string, page: number, inStock = true): Promise<YahooResult> {
   const appId = process.env.YAHOO_APP_ID;
   if (!appId) return { items: [], total: 0, shown: 0 };
 
@@ -238,7 +238,7 @@ async function searchYahoo(query: string, page: number): Promise<YahooResult> {
     url.searchParams.set("hits", String(hitsPerPage));
     url.searchParams.set("start", String(start));
     url.searchParams.set("sort", "+price");
-    url.searchParams.set("in_stock", "1");
+    if (inStock) url.searchParams.set("in_stock", "1");
 
     const res = await fetch(url.toString());
     if (!res.ok) {
@@ -324,14 +324,14 @@ export async function GET(request: NextRequest) {
         });
       }
 
-      // ─── Keepa未設定 or 結果なし → Yahoo (JAN確定のみ) ───
-      const yahooFallback = await searchYahoo(query, page);
-      const yahooJan = yahooFallback.items.filter((p) => p.jan);
-      if (yahooJan.length > 0) {
+      // ─── Keepa未設定 or 結果なし → Yahoo (在庫フィルタなし・全件) ───
+      const yahooFallback = await searchYahoo(query, page, false);
+      if (yahooFallback.items.length > 0) {
         const yahooPageCount = Math.ceil(yahooFallback.total / hitsPerPage);
-        const yahooSorted = [...yahooJan].sort(
+        const yahooSorted = [...yahooFallback.items].sort(
           (a, b) => (a.prices[0]?.price ?? Infinity) - (b.prices[0]?.price ?? Infinity)
         );
+        const janCount = yahooSorted.filter((p) => p.jan).length;
         return NextResponse.json({
           results: yahooSorted,
           meta: {
@@ -340,7 +340,7 @@ export async function GET(request: NextRequest) {
             totalHits: yahooFallback.total,
             totalShown: yahooSorted.length,
             sort: "価格の安い順",
-            janCount: yahooSorted.length,
+            janCount,
             rakuten: { total: 0, shown: 0, hasMore: false },
             yahoo: { total: yahooFallback.total, shown: yahooSorted.length, hasMore: page < yahooPageCount },
             page,
