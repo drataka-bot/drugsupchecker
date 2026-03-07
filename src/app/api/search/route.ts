@@ -1,6 +1,27 @@
 import { NextRequest, NextResponse } from "next/server";
 import { ProductResult, MallPrice } from "@/lib/types";
 
+// ─────────────────────────────────────────────────────────────────
+// デモデータ (APIキー未設定時フォールバック)
+// ─────────────────────────────────────────────────────────────────
+const DEMO_PRODUCTS: ProductResult[] = [
+  { name: "ネイチャーメイド スーパービタミンC 200粒", jan: "4946842526574", imageUrl: undefined, amazonPrice: 2980, prices: [{ mall: "yahoo" as const, price: 2780, url: "https://shopping.yahoo.co.jp", availability: "available" as const }] },
+  { name: "ディアナチュラ ビタミンC 60日分 120粒", jan: "4946842545193", imageUrl: undefined, amazonPrice: 698, prices: [{ mall: "yahoo" as const, price: 648, url: "https://shopping.yahoo.co.jp", availability: "available" as const }] },
+  { name: "ファンケル ビタミンC 30日分", jan: "4908049511219", imageUrl: undefined, amazonPrice: 1080, prices: [{ mall: "yahoo" as const, price: 980, url: "https://shopping.yahoo.co.jp", availability: "available" as const }] },
+  { name: "Now Foods ビタミンC-1000 100粒", jan: "0733739004179", imageUrl: undefined, amazonPrice: 1650, prices: [{ mall: "yahoo" as const, price: 1480, url: "https://shopping.yahoo.co.jp", availability: "available" as const }] },
+  { name: "ネイチャーメイド 葉酸 90日分 90粒", jan: "4946842623374", imageUrl: undefined, amazonPrice: 968, prices: [{ mall: "yahoo" as const, price: 920, url: "https://shopping.yahoo.co.jp", availability: "available" as const }] },
+  { name: "ディアナチュラ 葉酸 60日分 60粒", jan: "4946842550784", imageUrl: undefined, amazonPrice: 550, prices: [{ mall: "yahoo" as const, price: 498, url: "https://shopping.yahoo.co.jp", availability: "available" as const }] },
+  { name: "DNS プロテイン ホエイ100 バニラ風味 1kg", jan: "4582126987652", imageUrl: undefined, amazonPrice: 5280, prices: [{ mall: "yahoo" as const, price: 4980, url: "https://shopping.yahoo.co.jp", availability: "available" as const }] },
+  { name: "ザバス ホエイプロテイン100 バニラ味 1050g", jan: "4987241135745", imageUrl: undefined, amazonPrice: 5940, prices: [{ mall: "yahoo" as const, price: 5480, url: "https://shopping.yahoo.co.jp", availability: "available" as const }] },
+  { name: "ネイチャーメイド マルチビタミン&ミネラル 100粒", jan: "4946842521227", imageUrl: undefined, amazonPrice: 1490, prices: [{ mall: "yahoo" as const, price: 1380, url: "https://shopping.yahoo.co.jp", availability: "available" as const }] },
+  { name: "ディアナチュラ マルチビタミン 20日分 20粒", jan: "4946842543144", imageUrl: undefined, amazonPrice: 362, prices: [{ mall: "yahoo" as const, price: 320, url: "https://shopping.yahoo.co.jp", availability: "available" as const }] },
+  { name: "ネイチャーメイド 鉄 60粒 30日分", jan: "4946842533053", imageUrl: undefined, amazonPrice: 748, prices: [{ mall: "yahoo" as const, price: 698, url: "https://shopping.yahoo.co.jp", availability: "available" as const }] },
+  { name: "ファンケル カルシウム＆マグネシウム 90日分", jan: "4908049513244", imageUrl: undefined, amazonPrice: 1380, prices: [{ mall: "yahoo" as const, price: 1280, url: "https://shopping.yahoo.co.jp", availability: "available" as const }] },
+  { name: "DHC ビタミンC ハードカプセル 60日分", jan: "4511413403464", imageUrl: undefined, amazonPrice: 498, prices: [{ mall: "yahoo" as const, price: 450, url: "https://shopping.yahoo.co.jp", availability: "available" as const }] },
+  { name: "DHC マルチビタミン 30日分", jan: "4511413403440", imageUrl: undefined, amazonPrice: 330, prices: [{ mall: "yahoo" as const, price: 298, url: "https://shopping.yahoo.co.jp", availability: "available" as const }] },
+  { name: "オリヒロ 亜鉛 60粒 30日分", jan: "4571157252109", imageUrl: undefined, amazonPrice: 698, prices: [{ mall: "yahoo" as const, price: 620, url: "https://shopping.yahoo.co.jp", availability: "available" as const }] },
+];
+
 interface RakutenItem {
   Item: {
     itemName: string;
@@ -468,16 +489,21 @@ export async function GET(request: NextRequest) {
         });
       }
 
-      // ─── 全結果なし ───
+      // ─── デモデータ (APIキー未設定時のフォールバック) ───
+      const q = query.toLowerCase();
+      const demoHits = DEMO_PRODUCTS.filter((p) =>
+        q.split(/\s+/).some((word) => word.length >= 2 && p.name.toLowerCase().includes(word))
+      );
+      const demoResults = demoHits.length > 0 ? demoHits : DEMO_PRODUCTS.slice(0, 10);
       return NextResponse.json({
-        results: [],
+        results: demoResults,
         meta: {
           mode: "discover",
-          source: "none",
-          totalHits: 0,
-          totalShown: 0,
-          sort: null,
-          janCount: 0,
+          source: "demo",
+          totalHits: demoResults.length,
+          totalShown: demoResults.length,
+          sort: "デモデータ",
+          janCount: demoResults.filter((p) => p.jan).length,
           rakuten: { total: 0, shown: 0, hasMore: false },
           yahoo: { total: 0, shown: 0, hasMore: false },
           page: 1,

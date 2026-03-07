@@ -316,6 +316,12 @@ export default function Home() {
                 </div>
               ) : (
                 <div>
+                  {searchMeta?.source === "demo" && (
+                    <div className="mb-3 px-3 py-2 bg-yellow-50 border border-yellow-200 rounded-lg text-xs text-yellow-800">
+                      ⚠️ <strong>デモデータを表示しています。</strong>
+                      実際の検索には <code className="bg-yellow-100 px-1 rounded">KEEPA_API_KEY</code> または <code className="bg-yellow-100 px-1 rounded">YAHOO_APP_ID</code> の設定が必要です。
+                    </div>
+                  )}
                   <div className="flex flex-wrap items-center gap-2 mb-3 text-sm text-gray-500">
                     <span>
                       <strong className="text-gray-700">{results.length}件</strong> 表示
@@ -329,7 +335,7 @@ export default function Home() {
                         <span className="text-xs text-green-600">JAN確定 {searchMeta.janCount}件</span>
                       </>
                     )}
-                    {searchMeta?.sort && (
+                    {searchMeta?.sort && searchMeta.sort !== "デモデータ" && (
                       <>
                         <span className="text-gray-300">|</span>
                         <span className="text-xs bg-gray-100 px-2 py-0.5 rounded">{searchMeta.sort}</span>
