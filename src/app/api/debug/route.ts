@@ -3,6 +3,8 @@ import { NextResponse } from "next/server";
 export async function GET() {
   const keepaKey = process.env.KEEPA_API_KEY;
   const yahooId = process.env.YAHOO_APP_ID;
+  const rakutenAppId = process.env.RAKUTEN_APP_ID;
+  const rakutenAccessKey = process.env.RAKUTEN_ACCESS_KEY;
 
   function isValid(key: string | undefined) {
     if (!key || key.length < 4) return false;
@@ -12,6 +14,7 @@ export async function GET() {
 
   const keepaValid = isValid(keepaKey);
   const yahooValid = isValid(yahooId);
+  const rakutenValid = isValid(rakutenAppId) && isValid(rakutenAccessKey);
 
   // Keepa APIテスト
   let keepaTest: { ok: boolean; status?: number; error?: string; tokensLeft?: number } = { ok: false };
@@ -53,10 +56,12 @@ export async function GET() {
     env: {
       KEEPA_API_KEY: keepaValid ? `✅ 設定済み (${keepaKey!.slice(0, 4)}...${keepaKey!.slice(-4)})` : `❌ 未設定 (値: "${keepaKey?.slice(0, 20)}")`,
       YAHOO_APP_ID:  yahooValid ? `✅ 設定済み (${yahooId!.slice(0, 4)}...${yahooId!.slice(-4)})` : `❌ 未設定 (値: "${yahooId?.slice(0, 20)}")`,
+      RAKUTEN_APP_ID: rakutenValid ? `✅ 設定済み` : `❌ 未設定`,
     },
     api_test: {
       keepa: keepaValid ? keepaTest : "スキップ（キー未設定）",
       yahoo: yahooValid ? yahooTest : "スキップ（キー未設定）",
+      rakuten: rakutenValid ? "設定済み（テストスキップ）" : "スキップ（キー未設定）",
     },
   });
 }
