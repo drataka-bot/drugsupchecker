@@ -80,7 +80,10 @@ function isUsedItem(name: string): boolean {
 // ─────────────────────────────────────────────────────────────────
 
 function isValidKey(key: string | undefined): key is string {
-  return !!key && /^[A-Za-z0-9_\-]+$/.test(key);
+  if (!key || key.length < 4) return false;
+  // 日本語プレースホルダーや空白を含む場合は無効
+  if (/[\u3000-\u9fff\s]/.test(key)) return false;
+  return true;
 }
 
 async function searchKeepaByTermMultiple(term: string): Promise<{ products: ProductResult[]; totalFound: number }> {
