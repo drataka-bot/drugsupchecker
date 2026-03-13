@@ -310,9 +310,23 @@ export default function Home() {
             {/* discover モード: 商品グリッド */}
             {isDiscoverMode && searched && (
               results.length === 0 ? (
-                <div className="text-center py-16 text-gray-500">
-                  <p className="text-lg">商品が見つかりませんでした</p>
-                  <p className="text-sm mt-1">別のキーワードで試してください</p>
+                <div className="text-center py-12 text-gray-500">
+                  {searchMeta?.source === "none" ? (
+                    <div className="max-w-sm mx-auto text-left bg-orange-50 border border-orange-200 rounded-lg p-4 text-sm">
+                      <p className="font-bold text-orange-800 mb-2">⚠️ APIキーが設定されていません</p>
+                      <p className="text-orange-700 mb-3">商品を検索するには以下のどちらかが必要です：</p>
+                      <ul className="text-orange-700 space-y-1 list-disc list-inside">
+                        <li><code className="bg-orange-100 px-1 rounded text-xs">KEEPA_API_KEY</code>（Amazon商品データ）</li>
+                        <li><code className="bg-orange-100 px-1 rounded text-xs">YAHOO_APP_ID</code>（Yahoo!ショッピング）</li>
+                      </ul>
+                      <p className="text-orange-600 mt-3 text-xs">Vercelの環境変数に設定してください。設定状況は <a href="/api/debug" className="underline" target="_blank">/api/debug</a> で確認できます。</p>
+                    </div>
+                  ) : (
+                    <>
+                      <p className="text-lg">商品が見つかりませんでした</p>
+                      <p className="text-sm mt-1">別のキーワードで試してください</p>
+                    </>
+                  )}
                 </div>
               ) : (
                 <div>

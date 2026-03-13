@@ -16,21 +16,43 @@ export async function GET() {
   const yahooValid = isValid(yahooId);
   const rakutenValid = isValid(rakutenAppId) && isValid(rakutenAccessKey);
 
-  // Keepa APIテスト
-  let keepaTest: { ok: boolean; status?: number; error?: string; tokensLeft?: number } = { ok: false };
+  // Keepa product lookup テスト
+  let keepaProductTest: { ok: boolean; status?: number; error?: string; tokensLeft?: number; productFound?: boolean; price?: number | null } = { ok: false };
+  // Keepa search テスト（名前検索が動くか確認）
+  let keepaSearchTest: { ok: boolean; status?: number; error?: string; asinCount?: number; firstAsin?: string } = { ok: false };
+
   if (keepaValid) {
     try {
       const url = `https://api.keepa.com/product?key=${keepaKey}&domain=5&asin=B07S8TH8GX&stats=180`;
       const res = await fetch(url, { signal: AbortSignal.timeout(8000) });
       if (res.ok) {
         const data = await res.json();
-        keepaTest = { ok: true, status: res.status, tokensLeft: data.tokensLeft };
+        const product = data.products?.[0];
+        const stats = product?.stats?.current;
+        const price = stats ? (stats[0] > 0 ? Math.round(stats[0] / 100) : stats[7] > 0 ? Math.round(stats[7] / 100) : null) : null;
+        keepaProductTest = { ok: true, status: res.status, tokensLeft: data.tokensLeft, productFound: !!product, price };
       } else {
         const text = await res.text();
-        keepaTest = { ok: false, status: res.status, error: text.slice(0, 200) };
+        keepaProductTest = { ok: false, status: res.status, error: text.slice(0, 200) };
       }
     } catch (e) {
-      keepaTest = { ok: false, error: String(e) };
+      keepaProductTest = { ok: false, error: String(e) };
+    }
+
+    // Keepa search テスト
+    try {
+      const url = `https://api.keepa.com/search?key=${keepaKey}&domain=5&type=product&term=vitamin+c+supplement`;
+      const res = await fetch(url, { signal: AbortSignal.timeout(8000) });
+      if (res.ok) {
+        const data = await res.json();
+        const asinList: string[] = data.searchResult?.asinList ?? [];
+        keepaSearchTest = { ok: true, status: res.status, asinCount: asinList.length, firstAsin: asinList[0] };
+      } else {
+        const text = await res.text();
+        keepaSearchTest = { ok: false, status: res.status, error: text.slice(0, 200) };
+      }
+    } catch (e) {
+      keepaSearchTest = { ok: false, error: String(e) };
     }
   }
 
@@ -52,6 +74,30 @@ export async function GET() {
     }
   }
 
+  // Yahoo Shopping スクレイプテスト
+  let yahooScrapeTest: { ok: boolean; error?: string; htmlLength?: number; hasNextData?: boolean } = { ok: false };
+  try {
+    const res = await fetch("https://shopping.yahoo.co.jp/search?p=vitamin+c", {
+      signal: AbortSignal.timeout(8000),
+      headers: {
+        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
+        "Accept-Language": "ja-JP,ja;q=0.9",
+      },
+    });
+    if (res.ok) {
+      const html = await res.text();
+      yahooScrapeTest = {
+        ok: true,
+        htmlLength: html.length,
+        hasNextData: html.includes("__NEXT_DATA__"),
+      };
+    } else {
+      yahooScrapeTest = { ok: false, error: `HTTP ${res.status}` };
+    }
+  } catch (e) {
+    yahooScrapeTest = { ok: false, error: String(e) };
+  }
+
   return NextResponse.json({
     env: {
       KEEPA_API_KEY: keepaValid ? `✅ 設定済み (${keepaKey!.slice(0, 4)}...${keepaKey!.slice(-4)})` : `❌ 未設定 (値: "${keepaKey?.slice(0, 20)}")`,
@@ -59,9 +105,11 @@ export async function GET() {
       RAKUTEN_APP_ID: rakutenValid ? `✅ 設定済み` : `❌ 未設定`,
     },
     api_test: {
-      keepa: keepaValid ? keepaTest : "スキップ（キー未設定）",
-      yahoo: yahooValid ? yahooTest : "スキップ（キー未設定）",
-      rakuten: rakutenValid ? "設定済み（テストスキップ）" : "スキップ（キー未設定）",
+      keepa_product: keepaValid ? keepaProductTest : "スキップ（キー未設定）",
+      keepa_search: keepaValid ? keepaSearchTest : "スキップ（キー未設定）",
+      yahoo_api: yahooValid ? yahooTest : "スキップ（キー未設定）",
+      yahoo_scrape: yahooScrapeTest,
     },
+    note: "keepa_search.asinCount が 0 の場合、名前検索が機能していません。keepa_product が ok=true なら比較モードは動作します。",
   });
 }
