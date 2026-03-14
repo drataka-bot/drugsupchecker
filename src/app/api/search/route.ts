@@ -433,18 +433,24 @@ export async function GET(request: NextRequest) {
     // discover モード: 商品名検索 → JAN/ASIN を含む商品リスト
     // ═══════════════════════════════════════════════════════════
     if (type === "name") {
-      // 1. Keepa (Amazon)
-      const { products: keepaProducts, totalFound: keepaTotal } = await searchKeepaByTermMultiple(query);
-      if (keepaProducts.length > 0) {
+      // Yahoo API・Yahoo scrape・Keepa search を全部同時実行（タイムアウト積み重ね防止）
+      const [yahooApi, scraped, keepaResult] = await Promise.all([
+        searchYahoo(query, page, false),
+        scrapeYahooShopping(query),
+        searchKeepaByTermMultiple(query),
+      ]);
+
+      // 優先度: Keepa(Amazon) > Yahoo API > Yahoo Scrape
+      if (keepaResult.products.length > 0) {
         return NextResponse.json({
-          results: keepaProducts,
+          results: keepaResult.products,
           meta: {
             mode: "discover",
             source: "amazon",
-            totalHits: keepaTotal,
-            totalShown: keepaProducts.length,
+            totalHits: keepaResult.totalFound,
+            totalShown: keepaResult.products.length,
             sort: "Amazonの関連度順",
-            janCount: keepaProducts.filter((p) => p.jan).length,
+            janCount: keepaResult.products.filter((p) => p.jan).length,
             rakuten: { total: 0, shown: 0, hasMore: false },
             yahoo: { total: 0, shown: 0, hasMore: false },
             page: 1,
@@ -453,8 +459,6 @@ export async function GET(request: NextRequest) {
         });
       }
 
-      // 2. Yahoo Shopping API
-      const yahooApi = await searchYahoo(query, page, false);
       if (yahooApi.items.length > 0) {
         const yahooPageCount = Math.ceil(yahooApi.total / hitsPerPage);
         const sorted = [...yahooApi.items].sort(
@@ -477,8 +481,6 @@ export async function GET(request: NextRequest) {
         });
       }
 
-      // 3. Yahoo Shopping スクレイプ (APIキー不要)
-      const scraped = await scrapeYahooShopping(query);
       if (scraped.length > 0) {
         return NextResponse.json({
           results: scraped,
@@ -497,7 +499,6 @@ export async function GET(request: NextRequest) {
         });
       }
 
-      // 4. 何もなければ空
       return NextResponse.json({
         results: [],
         meta: {
@@ -519,20 +520,17 @@ export async function GET(request: NextRequest) {
     // keyword モード: 商品名 → JAN取得 → JANで比較
     // ═══════════════════════════════════════════════════════════
     if (type === "keyword") {
-      // JAN取得: Keepa → Yahoo
-      const { products: keepaTry } = await searchKeepaByTermMultiple(query);
-      let resolvedJan = keepaTry.find((p) => p.jan)?.jan ?? null;
-
-      if (!resolvedJan) {
-        const yahooForJan = await searchYahoo(query, 1);
-        resolvedJan = yahooForJan.items.find((i) => i.jan)?.jan ?? null;
-      }
-
-      if (!resolvedJan) {
-        // JANが取れなければスクレイプからも探す
-        const scraped = await scrapeYahooShopping(query);
-        resolvedJan = scraped.find((p) => p.jan)?.jan ?? null;
-      }
+      // JAN取得: Keepa・Yahoo・Scrapeを並列実行
+      const [keepaTry, yahooForJan, scrapedForJan] = await Promise.all([
+        searchKeepaByTermMultiple(query),
+        searchYahoo(query, 1),
+        scrapeYahooShopping(query),
+      ]);
+      const resolvedJan =
+        keepaTry.products.find((p) => p.jan)?.jan ??
+        yahooForJan.items.find((i) => i.jan)?.jan ??
+        scrapedForJan.find((p) => p.jan)?.jan ??
+        null;
 
       if (!resolvedJan) {
         return NextResponse.json({
@@ -541,25 +539,20 @@ export async function GET(request: NextRequest) {
         });
       }
 
-      const [rkResult, yhResults, keepaResult] = await Promise.all([
+      const [rkResult, yhResults, keepaResult, scrapeForPrice] = await Promise.all([
         searchRakuten(resolvedJan, 1, 30, siteUrl),
         searchYahoo(resolvedJan, 1),
         searchKeepa(resolvedJan, "jan"),
+        scrapeYahooShopping(resolvedJan),
       ]);
 
       const bestRk = cheapest(rkResult.items);
-      const bestYh = cheapest(yhResults.items);
+      const bestYh = cheapest(yhResults.items) ?? cheapest(scrapeForPrice);
       const amazonPrice: MallPrice | null = keepaResult.asin
         ? { mall: "amazon" as const, price: keepaResult.price, url: keepaResult.url!, availability: keepaResult.availability }
         : null;
 
-      // Yahoo スクレイプ fallback
-      let scrapedYahooPrice: MallPrice | null = null;
-      if (!bestYh) {
-        const scraped = await scrapeYahooShopping(resolvedJan);
-        const cheapestScraped = cheapest(scraped);
-        if (cheapestScraped) scrapedYahooPrice = cheapestScraped.prices[0];
-      }
+      const scrapedYahooPrice: MallPrice | null = null;
 
       const prices: MallPrice[] = [
         ...(amazonPrice ? [amazonPrice] : []),
@@ -601,20 +594,15 @@ export async function GET(request: NextRequest) {
       };
 
       if (resolvedJan) {
-        const [janRkResult, janYhResults] = await Promise.all([
+        // 楽天・Yahoo API・Yahooスクレイプを並列実行
+        const [janRkResult, janYhResults, janScraped] = await Promise.all([
           searchRakuten(resolvedJan, page, hitsPerPage, siteUrl),
           searchYahoo(resolvedJan, page),
+          scrapeYahooShopping(resolvedJan),
         ]);
 
-        let scrapedYahooPrice: MallPrice | null = null;
-        if (cheapest(janYhResults.items) === null) {
-          const scraped = await scrapeYahooShopping(resolvedJan);
-          const cheapestScraped = cheapest(scraped);
-          if (cheapestScraped) scrapedYahooPrice = cheapestScraped.prices[0];
-        }
-
         const bestJanRk = cheapest(janRkResult.items);
-        const bestJanYh = cheapest(janYhResults.items);
+        const bestJanYh = cheapest(janYhResults.items) ?? cheapest(janScraped);
 
         return NextResponse.json({
           results: [{
@@ -627,7 +615,6 @@ export async function GET(request: NextRequest) {
               amazonMall,
               ...(bestJanRk ? bestJanRk.prices : []),
               ...(bestJanYh ? bestJanYh.prices : []),
-              ...(scrapedYahooPrice ? [scrapedYahooPrice] : []),
             ],
           }],
           meta: { mode: "compare", rakuten: { total: janRkResult.total, shown: janRkResult.items.length, hasMore: false }, yahoo: { total: janYhResults.total, shown: janYhResults.shown, hasMore: false }, page: 1, hasMore: false },
@@ -650,17 +637,12 @@ export async function GET(request: NextRequest) {
     // ═══════════════════════════════════════════════════════════
     // JAN比較: 楽天+Yahoo+Keepa 並列
     // ═══════════════════════════════════════════════════════════
-    const [rkResult, yahooResults, keepaResult] = await Promise.all([
+    const [rkResult, yahooResults, keepaResult, scrapedYahoo] = await Promise.all([
       searchRakuten(query, page, hitsPerPage, siteUrl),
       searchYahoo(query, page),
       searchKeepa(query, "jan"),
+      scrapeYahooShopping(query),
     ]);
-
-    // Yahoo スクレイプ fallback (Yahoo API未設定時)
-    let scrapedYahoo: ProductResult[] = [];
-    if (yahooResults.items.length === 0 && !isValidKey(process.env.YAHOO_APP_ID)) {
-      scrapedYahoo = await scrapeYahooShopping(query);
-    }
 
     const bestRakuten = cheapest(rkResult.items);
     const bestYahoo = cheapest(yahooResults.items) ?? cheapest(scrapedYahoo);
