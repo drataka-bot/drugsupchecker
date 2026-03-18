@@ -37,7 +37,7 @@ interface KeepaResult {
 }
 
 const KEEPA_NULL: KeepaResult = { price: null, availability: "unknown", asin: null, jan: null, url: null, name: null, imageUrl: null };
-const FETCH_TIMEOUT = 8000;
+const FETCH_TIMEOUT = 4000;  // Keepaは2回呼ぶので1回4秒→合計8秒でVercel10秒制限内に収める
 
 // ─────────────────────────────────────────────────────────────────
 // ユーティリティ
@@ -439,6 +439,7 @@ export async function GET(request: NextRequest) {
         scrapeYahooShopping(query),
         searchKeepaByTermMultiple(query),
       ]);
+      console.log("[discover]", { query, keepa: keepaResult.products.length, yahoo: yahooApi.items.length, scrape: scraped.length });
 
       // 優先度: Keepa(Amazon) > Yahoo API > Yahoo Scrape
       if (keepaResult.products.length > 0) {
@@ -512,6 +513,12 @@ export async function GET(request: NextRequest) {
           yahoo: { total: 0, shown: 0, hasMore: false },
           page: 1,
           hasMore: false,
+          debug: {
+            keepa: keepaResult.products.length,
+            yahoo: yahooApi.items.length,
+            scrape: scraped.length,
+            keepaKey: !!process.env.KEEPA_API_KEY,
+          },
         },
       });
     }
